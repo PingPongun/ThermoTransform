@@ -1,0 +1,18 @@
+{
+    "nrf-connect.toolchain.path": "${nrf-connect.toolchain:2.2.0}",
+    "nrf-connect.topdir": "${nrf-connect.sdk:2.2.0}",
+    "editor.formatOnSave": true,
+    "rust-analyzer.cargo.allFeatures": false,
+    "rust-analyzer.check.allTargets": false,
+    "rust-analyzer.cargo.target": "x86_64-pc-windows-msvc",
+    "rust-analyzer.checkOnSave.allTargets": false,
+    "rust-analyzer.procMacro.enable": true,
+    "files.watcherExclude": {
+        "**/.git/objects/**": true,
+        "**/.git/subtree-cache/**": true,
+        "**/target/**": true,
+    },
+    "rust-analyzer.imports.granularity.group": "module",
+    // "rust-analyzer.cargo.buildScripts.enable": true,
+    "rust-analyzer.procMacro.attributes.enable": false,
+}
