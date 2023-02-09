@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
@@ -16,7 +17,7 @@ impl Default for TTInputData
 
 impl TTInputData
 {
-    pub fn new(path : PathBuf) -> Self
+    pub fn new(path : OsString) -> Self
     {
         let f : File = match File::open(path.clone())
         {

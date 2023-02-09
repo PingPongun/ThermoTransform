@@ -3,12 +3,13 @@
 
 // When compiling natively:
 #[cfg(not(target_arch = "wasm32"))]
-fn main() {
+fn main()
+{
     // Log to stdout (if you run with `RUST_LOG=debug`).
     tracing_subscriber::fmt::init();
 
-    let native_options = eframe::NativeOptions{
-        drag_and_drop_support: true,
+    let native_options = eframe::NativeOptions {
+        drag_and_drop_support : true,
         ..Default::default()
     };
     eframe::run_native(
@@ -20,7 +21,8 @@ fn main() {
 
 // when compiling to web using trunk.
 #[cfg(target_arch = "wasm32")]
-fn main() {
+fn main()
+{
     // Make sure panics are logged using `console.error`.
     console_error_panic_hook::set_once();
 
