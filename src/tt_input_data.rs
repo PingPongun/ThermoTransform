@@ -18,23 +18,22 @@ pub enum FileState
     Ready,
 }
 
+#[derive(PartialEq)]
 pub struct TTInputData(pub Array3<f32>);
-
 impl Default for TTInputData
 {
     fn default() -> Self { Self(Array3::default((1, 1, 1))) }
 }
-
 impl TTInputData
 {
-    pub fn new(path : OsString) -> Self
+    pub fn new(path : &OsString, file_state : Arc<AtomicFileState>) -> Option<Self>
     {
         let f : File = match File::open(path.clone())
         {
             Ok(it) => it,
             Err(_) =>
             {
-                return TTInputData::default();
+                return None;
             }
         };
 
@@ -51,6 +50,11 @@ impl TTInputData
         for line in fr.lines()
         // for iline in file_content_string.lines()
         {
+            if file_state.load(Ordering::Relaxed) != FileState::Loading
+            {
+                //file selection has been changed, ongoing file reading is outdated/invalid
+                return None;
+            }
             match line
             {
                 Ok(iline) =>
@@ -98,6 +102,8 @@ impl TTInputData
             };
         }
 
-        TTInputData(Array::from_shape_vec((depths, rows, columns), v_f32).unwrap())
+        Some(TTInputData(
+            Array::from_shape_vec((depths, rows, columns), v_f32).unwrap(),
+        ))
     }
 }
