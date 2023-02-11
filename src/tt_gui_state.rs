@@ -165,8 +165,9 @@ fn tt_view_new(name : &str, params : TTViewParams, ctx : &Context) -> (TTViewGUI
 
 impl TTViewGUI
 {
-    pub fn show(&mut self, ui : &mut egui::Ui) -> ()
+    pub fn show(&mut self, ui : &mut egui::Ui) -> bool
     {
+        let mut retval = false;
         ui.vertical(|ui| {
             if self.state.load(Ordering::Relaxed) == TTViewState::Invalid
             {
@@ -176,6 +177,7 @@ impl TTViewGUI
             if let (true, scale_changed) = self.params.input_buffer().show(ui)
             {
                 //params changed by user
+                retval = true;
                 if scale_changed
                 {
                     if let TransformView {
@@ -237,6 +239,7 @@ impl TTViewGUI
                 },
             );
         });
+        retval
     }
 }
 
@@ -297,6 +300,14 @@ impl TTStateGUI
             })),
         }
     }
+    pub fn notify_backend(&self) -> ()
+    {
+        //wake up backend
+        let &(ref lock, ref cvar) = &*self.changed;
+        let mut started = lock.lock();
+        *started = true;
+        cvar.notify_one();
+    }
     pub fn set_file_path(&mut self, path : Option<OsString>) -> ()
     {
         //invalidate views
@@ -308,13 +319,7 @@ impl TTStateGUI
         //update new gui working buffer
         *self.file.path.input_buffer() = path;
         self.file.state.store(FileState::New, Ordering::Relaxed);
-        //wake up backend
-        {
-            let &(ref lock, ref cvar) = &*self.changed;
-            let mut started = lock.lock();
-            *started = true;
-            cvar.notify_one();
-        }
+        self.notify_backend()
     }
     pub fn get_file(&mut self) -> (Option<OsString>, FileState)
     {
@@ -383,6 +388,7 @@ impl TTStateGUI
                             *view.params.input_buffer() = params;
                             view.state.store(TTViewState::Changed, Ordering::Relaxed);
                         });
+                        self.notify_backend();
                         ui.label(path.to_string_lossy());
                         ui.label(" Processing...");
                         ui.spinner();
@@ -423,27 +429,32 @@ impl TTStateGUI
             });
             let available_height = ui.available_height() / 2.0;
             let available_width = ui.available_width() / 2.0;
+            let mut changed = false;
             TableBuilder::new(ui)
                 .column(Column::exact(available_width))
                 .column(Column::exact(available_width))
                 .body(|mut body| {
                     body.row(available_height, |mut row| {
                         row.col(|ui| {
-                            self.views[0].show(ui);
+                            changed |= self.views[0].show(ui);
                         });
                         row.col(|ui| {
-                            self.views[1].show(ui);
+                            changed |= self.views[1].show(ui);
                         });
                     });
                     body.row(available_height, |mut row| {
                         row.col(|ui| {
-                            self.views[2].show(ui);
+                            changed |= self.views[2].show(ui);
                         });
                         row.col(|ui| {
-                            self.views[3].show(ui);
+                            changed |= self.views[3].show(ui);
                         });
                     });
                 });
+            if changed
+            {
+                self.notify_backend();
+            }
         });
     }
 }
@@ -452,6 +463,7 @@ impl Drop for TTStateGUI
     fn drop(&mut self)
     {
         self.stop_flag.store(true, Ordering::SeqCst);
+        self.notify_backend();
         loop
         {
             if let Some(handle) = &self.backend_handle
