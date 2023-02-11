@@ -263,6 +263,46 @@ pub struct TTViewBackend
     params : tribuf::Output<TTViewParams>,
 }
 
+impl TTViewBackend
+{
+    fn update_image<'a>(&mut self, array : ArrayView2<'a, f32>) -> ()
+    {
+        let array_iter = array.into_par_iter().cloned();
+        let grad = colorgrad::inferno();
+        //find minimal and maximal value of pixel"
+        let (min, max) = array_iter
+            .clone()
+            .fold(
+                || (f32::INFINITY, f32::NEG_INFINITY),
+                |(min, max), x| (min.min(x), max.max(x)),
+            )
+            .reduce(
+                || (f32::INFINITY, f32::NEG_INFINITY),
+                |(min, max), (xmin, xmax)| (min.min(xmin), max.max(xmax)),
+            );
+        let mul = 1.0 / (max - min);
+        let add = -min * mul;
+        let rgb = array_iter
+            .map(|x| {
+                let color = grad.at((x * mul + add).into()).to_rgba8(); //scale value to 0..=1 range
+                [color[0], color[1], color[2]]
+            })
+            .flatten()
+            .collect::<Vec<u8>>();
+        let color_image = ColorImage::from_rgb([array.dim().1, array.dim().0], &rgb);
+        self.image
+            .input_buffer()
+            .set(color_image, TextureOptions::LINEAR);
+        self.image.publish();
+        let _ = self.state.compare_exchange(
+            TTViewState::Processing,
+            TTViewState::Valid,
+            Ordering::SeqCst,
+            Ordering::Acquire,
+        );
+    }
+}
+
 pub struct TTViewGUI
 {
     state :  Arc<AtomicTTViewState>,
