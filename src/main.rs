@@ -15,7 +15,7 @@ fn main()
     eframe::run_native(
         "ThermoTransform",
         native_options,
-        Box::new(|cc| Box::new(ThermoTransform::TemplateApp::new(cc))),
+        Box::new(|cc| Box::new(ThermoTransform::ThermoTransformApp::new(cc))),
     );
 }
 

@@ -1,10 +1,11 @@
 use std::path::PathBuf;
-#[path = "thermo_backend.rs"]
-mod thermo_backend;
+
+use crate::thermo_backend::TTStateGUI;
+
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 // #[derive(serde::Deserialize, serde::Serialize)]
 // #[serde(default)] // if we add new fields, give them default values when deserializing old state
-pub struct TemplateApp
+pub struct ThermoTransformApp
 {
     // Example stuff:
     label :         String,
@@ -15,10 +16,10 @@ pub struct TemplateApp
     // #[serde(skip)]
     value :       f32,
     // #[serde(skip)]
-    pub backend : thermo_backend::TTStateGUI,
+    pub backend : TTStateGUI,
 }
 
-impl TemplateApp
+impl ThermoTransformApp
 {
     /// Called once before the first frame.
     pub fn new(cc : &eframe::CreationContext<'_>) -> Self
@@ -38,12 +39,12 @@ impl TemplateApp
             value :         2.7,
             dropped_files : None,
             picked_path :   None,
-            backend :       thermo_backend::TTStateGUI::new(&cc.egui_ctx),
+            backend :       TTStateGUI::new(&cc.egui_ctx),
         }
     }
 }
 
-impl eframe::App for TemplateApp
+impl eframe::App for ThermoTransformApp
 {
     /// Called by the frame work to save state before shutdown.
     // fn save(&mut self, storage : &mut dyn eframe::Storage)

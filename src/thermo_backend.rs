@@ -1,27 +1,21 @@
 use atomic_enum::atomic_enum;
-use egui::mutex::Mutex;
-use egui::{ColorImage, Context, DragValue, Layout, TextureHandle, TextureOptions, Vec2, Widget};
+use egui::{ColorImage, Context, DragValue, TextureHandle, TextureOptions, Vec2};
 use egui_extras::{Column, TableBuilder};
-use ndarray::Array2;
-use parking_lot::Condvar;
+use ndarray::{ArrayView2, Axis};
+use parking_lot::{Condvar, Mutex};
+use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use std::ffi::OsString;
-use std::fs::File;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use tribuf::TripleBuffer;
+use strum_macros::{EnumString, EnumVariantNames};
 use triple_buffer as tribuf;
 use triple_buffer::triple_buffer;
 
-use strum_macros::{EnumString, EnumVariantNames};
-
+use crate::cwt::*;
+use crate::tt_input_data::*;
 use strum::VariantNames;
-#[path = "cwt.rs"]
-mod cwt;
-#[path = "tt_input_data.rs"]
-mod tt_input_data;
-
 #[derive(
     Clone, Copy, PartialEq, Debug, Default, strum_macros::AsRefStr, EnumString, EnumVariantNames,
 )]
@@ -288,22 +282,14 @@ fn TTView_new(name : &str, params : TTViewParams, ctx : &Context) -> (TTViewGUI,
         },
     )
 }
-#[atomic_enum]
-pub enum FileState
-{
-    None,
-    New,
-    Loading,
-    Loaded,
-    Ready,
-}
+
 pub struct TTFileBackend
 {
     frames :           Arc<AtomicUsize>,
     state :            Arc<AtomicFileState>,
     path :             tribuf::Output<Option<OsString>>,
-    input_data :       Option<tt_input_data::TTInputData>,
-    input_integrated : Option<cwt::TTInputIntegrated>,
+    input_data :       Option<TTInputData>,
+    input_integrated : Option<TTInputIntegrated>,
 }
 pub struct TTFileGUI
 {
