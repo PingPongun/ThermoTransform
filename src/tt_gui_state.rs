@@ -1,107 +1,50 @@
-use atomic_enum::atomic_enum;
 use egui::{ColorImage, Context, DragValue, TextureHandle, TextureOptions, Vec2};
 use egui_extras::{Column, TableBuilder};
-use ndarray::{ArrayView2, Axis};
 use parking_lot::{Condvar, Mutex};
-use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use std::ffi::OsString;
-use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use strum_macros::{EnumString, EnumVariantNames};
+use strum::VariantNames;
 use triple_buffer as tribuf;
 use triple_buffer::triple_buffer;
 
 use crate::cwt::*;
+use crate::tt_backend_state::*;
+use crate::tt_common_state::*;
 use crate::tt_input_data::*;
-use strum::VariantNames;
-#[derive(
-    Clone, Copy, PartialEq, Debug, Default, strum_macros::AsRefStr, EnumString, EnumVariantNames,
-)]
-#[strum(serialize_all = "title_case")]
-pub enum WtResultMode
+
+//=======================================
+//=================Types=================
+//=======================================
+
+pub struct TTViewGUI
 {
-    #[default]
-    Phase,
-    Magnitude,
-    Real,
-    Imaginary,
-}
-#[derive(
-    Clone, Copy, PartialEq, Debug, Default, strum_macros::AsRefStr, EnumString, EnumVariantNames,
-)]
-#[strum(serialize_all = "title_case")]
-pub enum WaveletType
-{
-    #[default]
-    Morlet,
-}
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct RangedVal
-{
-    val : usize,
-    min : usize,
-    max : usize,
+    state :  Arc<AtomicTTViewState>,
+    image :  tribuf::Output<TextureHandle>,
+    params : tribuf::Input<TTViewParams>,
 }
 
-impl RangedVal
+pub struct TTFileGUI
 {
-    fn show(&mut self, ui : &mut egui::Ui) -> bool
-    {
-        ui.add(DragValue::new(&mut self.val).clamp_range(self.min..=self.max))
-            .changed()
-    }
-}
-impl Default for RangedVal
-{
-    fn default() -> Self
-    {
-        Self {
-            val : 0,
-            min : 0,
-            max : 100,
-        }
-    }
-}
-#[derive(
-    Clone,
-    Copy,
-    PartialEq,
-    Debug,
-    strum_macros::IntoStaticStr,
-    strum_macros::AsRefStr,
-    EnumVariantNames,
-)]
-#[strum(serialize_all = "title_case")]
-pub enum TTViewParams
-{
-    TransformView
-    {
-        scale :   RangedVal,
-        time :    RangedVal,
-        wavelet : WaveletType,
-        mode :    WtResultMode,
-    },
-    TimeView
-    {
-        time : RangedVal
-    },
-}
-trait EnumUpdate<T>
-{
-    fn update(&mut self, new_val : &str);
+    frames : Arc<AtomicUsize>,
+    state :  Arc<AtomicFileState>,
+    path :   tribuf::Input<Option<OsString>>,
 }
 
-impl<T> EnumUpdate<T> for T
-where
-    T : VariantNames,
-    T : AsRef<str>,
-    T : FromStr,
-    <T as FromStr>::Err : std::fmt::Debug,
+pub struct TTStateGUI
 {
-    fn update(&mut self, new_val : &str) { *self = T::from_str(new_val).unwrap(); }
+    views :          [TTViewGUI; 4],
+    changed :        Arc<(Mutex<bool>, Condvar)>,
+    stop_flag :      Arc<AtomicBool>,
+    file :           TTFileGUI,
+    backend_handle : Option<JoinHandle<()>>,
 }
+
+//=======================================
+//=====Traits & Trait Implementations====
+//=======================================
+
 trait EnumCombobox<T>
 {
     fn show_combobox(&mut self, ui : &mut egui::Ui) -> bool;
@@ -144,66 +87,17 @@ where
         retval
     }
 }
-impl EnumUpdate<TTViewParams> for TTViewParams
+//=======================================
+//=====Common Types Implementations======
+//=======================================
+impl RangedVal
 {
-    fn update(&mut self, new_val : &str)
+    fn show(&mut self, ui : &mut egui::Ui) -> bool
     {
-        let timeview : &'static str = (TimeView {
-            time : Default::default(),
-        })
-        .into();
-        let transformview : &'static str = (TransformView {
-            time :    Default::default(),
-            scale :   Default::default(),
-            wavelet : Default::default(),
-            mode :    Default::default(),
-        })
-        .into();
-        let frames;
-        match self
-        {
-            TimeView { time } => frames = time.max + 1,
-            TransformView {
-                scale,
-                time: _,
-                wavelet: _,
-                mode: _,
-            } => frames = scale.max,
-        };
-        if timeview == new_val
-        {
-            *self = TimeView {
-                time : RangedVal {
-                    val : 0,
-                    min : 0,
-                    max : frames - 1,
-                },
-            }
-        }
-        else if transformview == new_val
-        {
-            *self = TransformView {
-                time :    RangedVal {
-                    val : 0,
-                    min : 0,
-                    max : frames - 1,
-                },
-                scale :   RangedVal {
-                    val : 1,
-                    min : 1,
-                    max : frames,
-                },
-                wavelet : Default::default(),
-                mode :    Default::default(),
-            }
-        }
-        else
-        {
-            unreachable!()
-        }
+        ui.add(DragValue::new(&mut self.val).clamp_range(self.min..=self.max))
+            .changed()
     }
 }
-
 impl TTViewParams
 {
     ///#Returns (a,b)
@@ -245,70 +139,29 @@ impl TTViewParams
         retval
     }
 }
-use TTViewParams::{TimeView, TransformView};
-#[atomic_enum]
-#[derive(PartialEq)]
-pub enum TTViewState
+fn tt_view_new(name : &str, params : TTViewParams, ctx : &Context) -> (TTViewGUI, TTViewBackend)
 {
-    Valid,
-    Processing,
-    Changed,
-    Invalid,
+    let (image_input, image_output) =
+        triple_buffer(&ctx.load_texture(name, ColorImage::example(), TextureOptions::LINEAR));
+    let (params_input, params_output) = triple_buffer(&params);
+    let state = Arc::new(AtomicTTViewState::new(TTViewState::Invalid));
+    (
+        TTViewGUI {
+            state :  state.clone(),
+            image :  image_output,
+            params : params_input,
+        },
+        TTViewBackend {
+            state :  state,
+            image :  image_input,
+            params : params_output,
+        },
+    )
 }
 
-pub struct TTViewBackend
-{
-    state :  Arc<AtomicTTViewState>,
-    image :  tribuf::Input<TextureHandle>,
-    params : tribuf::Output<TTViewParams>,
-}
-
-impl TTViewBackend
-{
-    fn update_image<'a>(&mut self, array : ArrayView2<'a, f32>) -> ()
-    {
-        let array_iter = array.into_par_iter().cloned();
-        let grad = colorgrad::inferno();
-        //find minimal and maximal value of pixel"
-        let (min, max) = array_iter
-            .clone()
-            .fold(
-                || (f32::INFINITY, f32::NEG_INFINITY),
-                |(min, max), x| (min.min(x), max.max(x)),
-            )
-            .reduce(
-                || (f32::INFINITY, f32::NEG_INFINITY),
-                |(min, max), (xmin, xmax)| (min.min(xmin), max.max(xmax)),
-            );
-        let mul = 1.0 / (max - min);
-        let add = -min * mul;
-        let rgb = array_iter
-            .map(|x| {
-                let color = grad.at((x * mul + add).into()).to_rgba8(); //scale value to 0..=1 range
-                [color[0], color[1], color[2]]
-            })
-            .flatten()
-            .collect::<Vec<u8>>();
-        let color_image = ColorImage::from_rgb([array.dim().1, array.dim().0], &rgb);
-        self.image
-            .input_buffer()
-            .set(color_image, TextureOptions::LINEAR);
-        self.image.publish();
-        let _ = self.state.compare_exchange(
-            TTViewState::Processing,
-            TTViewState::Valid,
-            Ordering::SeqCst,
-            Ordering::Acquire,
-        );
-    }
-}
-
-pub struct TTViewGUI
-{
-    state :  Arc<AtomicTTViewState>,
-    image :  tribuf::Output<TextureHandle>,
-    params : tribuf::Input<TTViewParams>,
-}
+//=======================================
+//============Implementations============
+//=======================================
 
 impl TTViewGUI
 {
@@ -330,7 +183,7 @@ impl TTViewGUI
                         mut time,
                         wavelet,
                         mode,
-                    } = (*self.params.input_buffer())
+                    } = *self.params.input_buffer()
                     {
                         time.max = scale.max - scale.val;
                         (*self.params.input_buffer()) = TransformView {
@@ -386,56 +239,6 @@ impl TTViewGUI
         });
     }
 }
-fn TTView_new(name : &str, params : TTViewParams, ctx : &Context) -> (TTViewGUI, TTViewBackend)
-{
-    let (image_input, image_output) =
-        triple_buffer(&ctx.load_texture(name, ColorImage::example(), TextureOptions::LINEAR));
-    let (params_input, params_output) = triple_buffer(&params);
-    let state = Arc::new(AtomicTTViewState::new(TTViewState::Invalid));
-    (
-        TTViewGUI {
-            state :  state.clone(),
-            image :  image_output,
-            params : params_input,
-        },
-        TTViewBackend {
-            state :  state,
-            image :  image_input,
-            params : params_output,
-        },
-    )
-}
-
-pub struct TTFileBackend
-{
-    frames :           Arc<AtomicUsize>,
-    state :            Arc<AtomicFileState>,
-    path :             tribuf::Output<Option<OsString>>,
-    input_data :       Option<TTInputData>,
-    input_integrated : Option<TTInputIntegrated>,
-}
-pub struct TTFileGUI
-{
-    frames : Arc<AtomicUsize>,
-    state :  Arc<AtomicFileState>,
-    path :   tribuf::Input<Option<OsString>>,
-}
-pub struct TTStateBackend
-{
-    views :     [TTViewBackend; 4],
-    changed :   Arc<(Mutex<bool>, Condvar)>,
-    stop_flag : Arc<AtomicBool>,
-    file :      TTFileBackend,
-}
-
-pub struct TTStateGUI
-{
-    views :          [TTViewGUI; 4],
-    changed :        Arc<(Mutex<bool>, Condvar)>,
-    stop_flag :      Arc<AtomicBool>,
-    file :           TTFileGUI,
-    backend_handle : Option<JoinHandle<()>>,
-}
 
 impl TTStateGUI
 {
@@ -463,7 +266,7 @@ impl TTStateGUI
         ];
         // let (mut views_gui, mut views_backend) : ([TTViewGUI; 4], [TTViewBackend; 4]) =
         let [(g1,b1),(g2,b2),(g3,b3),(g4,b4)] //: [(TTViewGUI, TTViewBackend); 4] 
-        = default_view_params.map( |x| TTView_new("TTParams",x, ctx));
+        = default_view_params.map( |x| tt_view_new("TTParams",x, ctx));
 
         let (path_gui, path_backend) = triple_buffer(&None);
 
@@ -665,169 +468,6 @@ impl Drop for TTStateGUI
             else
             {
                 break;
-            }
-        }
-    }
-}
-
-impl TTStateBackend
-{
-    fn check_changed_and_sleep(&mut self) -> ()
-    {
-        let &(ref mx, ref cvar) = &*self.changed;
-        let mut mxval = mx.lock();
-        if *mxval == false
-        {
-            //no new changes backend can sleep
-            cvar.wait(&mut mxval);
-        }
-        *mxval = false;
-    }
-
-    fn run(&mut self) -> ()
-    {
-        while self.stop_flag.load(Ordering::Relaxed) == false
-        {
-            match self.file.state.load(Ordering::Relaxed)
-            {
-                FileState::None =>
-                {
-                    self.file.input_data = None;
-                    self.file.input_integrated = None;
-                    self.check_changed_and_sleep();
-                }
-                FileState::New =>
-                {
-                    //input file path changed
-                    let _ = self.file.state.compare_exchange(
-                        FileState::New,
-                        FileState::Loading,
-                        Ordering::SeqCst,
-                        Ordering::Acquire,
-                    );
-                }
-                FileState::Loading =>
-                {
-                    self.file.input_integrated = None;
-                    if let Some(path) = self.file.path.read()
-                    {
-                        self.file.input_data = TTInputData::new(path, self.file.state.clone());
-                    }
-                    else
-                    {
-                        unreachable!()
-                    }
-                    if let Some(input) = &self.file.input_data
-                    {
-                        //file loaded correctly
-                        self.file
-                            .frames
-                            .store(input.0.len_of(ndarray::Axis(0)), Ordering::Relaxed);
-                        let _ = self.file.state.compare_exchange(
-                            FileState::Loading,
-                            FileState::Loaded,
-                            Ordering::SeqCst,
-                            Ordering::Acquire,
-                        );
-                    }
-                }
-                FileState::Loaded =>
-                    //this state is only for gui to acknowlege processing completed
-                    {}
-                FileState::Processing =>
-                {
-                    if let Some(input) = &self.file.input_data
-                    {
-                        rayon::join(
-                            || {
-                                //continously update time views if necessary
-                                while FileState::Processing
-                                    == self.file.state.load(Ordering::Relaxed)
-                                    && self.stop_flag.load(Ordering::Relaxed) == false
-                                {
-                                    for view in &mut self.views
-                                    {
-                                        if let TimeView { time } = view.params.read()
-                                        {
-                                            if let Ok(_) = view.state.compare_exchange(
-                                                TTViewState::Changed,
-                                                TTViewState::Processing,
-                                                Ordering::SeqCst,
-                                                Ordering::Acquire,
-                                            )
-                                            {
-                                                if let Some(input) = &self.file.input_data
-                                                {
-                                                    let input_view =
-                                                        input.0.index_axis(Axis(0), time.val);
-                                                    view.update_image(input_view);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            },
-                            || {
-                                self.file.input_integrated =
-                                    TTInputIntegrated::new(input, self.file.state.clone());
-                                if let Some(_) = &self.file.input_integrated
-                                {
-                                    //file processed correctly
-                                    let _ = self.file.state.compare_exchange(
-                                        FileState::Processing,
-                                        FileState::Ready,
-                                        Ordering::SeqCst,
-                                        Ordering::Acquire,
-                                    );
-                                }
-                            },
-                        );
-                    }
-                    else
-                    {
-                        unreachable!()
-                    }
-                }
-                FileState::Ready =>
-                {
-                    for view in &mut self.views
-                    {
-                        if let Ok(_) = view.state.compare_exchange(
-                            TTViewState::Changed,
-                            TTViewState::Processing,
-                            Ordering::SeqCst,
-                            Ordering::Acquire,
-                        )
-                        {
-                            match view.params.read()
-                            {
-                                TimeView { time } =>
-                                {
-                                    if let Some(input) = &self.file.input_data
-                                    {
-                                        let input_view = input.0.index_axis(Axis(0), time.val);
-                                        view.update_image(input_view);
-                                    }
-                                }
-                                TransformView {
-                                    scale,
-                                    time,
-                                    wavelet,
-                                    mode,
-                                } =>
-                                {
-                                    if let Some(input) = &self.file.input_integrated
-                                    {
-                                        //TODO calculate & display requested waveletet transform
-                                        let input_view = input.0.index_axis(Axis(0), time.val);
-                                        view.update_image(input_view);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    self.check_changed_and_sleep();
-                }
             }
         }
     }
