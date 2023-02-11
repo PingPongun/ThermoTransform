@@ -417,7 +417,9 @@ impl TTStateGUI
                     }
                     (Some(path), FileState::Loaded) =>
                     {
-                        self.file.state.store(FileState::Ready, Ordering::Relaxed);
+                        self.file
+                            .state
+                            .store(FileState::Processing, Ordering::Relaxed);
                         let frames = self.file.frames.load(Ordering::Relaxed);
                         //enable views generation
                         self.views.iter_mut().for_each(|view| {
@@ -456,10 +458,19 @@ impl TTStateGUI
                             view.state.store(TTViewState::Changed, Ordering::Relaxed);
                         });
                         ui.label(path.to_string_lossy());
+                        ui.label(" Processing...");
+                        ui.spinner();
+                    }
+                    (Some(path), FileState::Processing) =>
+                    {
+                        ui.label(path.to_string_lossy());
+                        ui.label(" Processing...");
+                        ui.spinner();
                     }
                     (Some(path), _) =>
                     {
                         ui.label(path.to_string_lossy());
+                        ui.label(" Loading...");
                         ui.spinner();
                     }
                 }
