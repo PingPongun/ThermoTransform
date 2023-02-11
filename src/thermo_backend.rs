@@ -672,12 +672,162 @@ impl Drop for TTStateGUI
 
 impl TTStateBackend
 {
+    fn check_changed_and_sleep(&mut self) -> ()
+    {
+        let &(ref mx, ref cvar) = &*self.changed;
+        let mut mxval = mx.lock();
+        if *mxval == false
+        {
+            //no new changes backend can sleep
+            cvar.wait(&mut mxval);
+        }
+        *mxval = false;
+    }
+
     fn run(&mut self) -> ()
     {
         while self.stop_flag.load(Ordering::Relaxed) == false
         {
-            if self.file.path.update()
-            { //input file path changed
+            match self.file.state.load(Ordering::Relaxed)
+            {
+                FileState::None =>
+                {
+                    self.file.input_data = None;
+                    self.file.input_integrated = None;
+                    self.check_changed_and_sleep();
+                }
+                FileState::New =>
+                {
+                    //input file path changed
+                    let _ = self.file.state.compare_exchange(
+                        FileState::New,
+                        FileState::Loading,
+                        Ordering::SeqCst,
+                        Ordering::Acquire,
+                    );
+                }
+                FileState::Loading =>
+                {
+                    self.file.input_integrated = None;
+                    if let Some(path) = self.file.path.read()
+                    {
+                        self.file.input_data = TTInputData::new(path, self.file.state.clone());
+                    }
+                    else
+                    {
+                        unreachable!()
+                    }
+                    if let Some(input) = &self.file.input_data
+                    {
+                        //file loaded correctly
+                        self.file
+                            .frames
+                            .store(input.0.len_of(ndarray::Axis(0)), Ordering::Relaxed);
+                        let _ = self.file.state.compare_exchange(
+                            FileState::Loading,
+                            FileState::Loaded,
+                            Ordering::SeqCst,
+                            Ordering::Acquire,
+                        );
+                    }
+                }
+                FileState::Loaded =>
+                    //this state is only for gui to acknowlege processing completed
+                    {}
+                FileState::Processing =>
+                {
+                    if let Some(input) = &self.file.input_data
+                    {
+                        rayon::join(
+                            || {
+                                //continously update time views if necessary
+                                while FileState::Processing
+                                    == self.file.state.load(Ordering::Relaxed)
+                                    && self.stop_flag.load(Ordering::Relaxed) == false
+                                {
+                                    for view in &mut self.views
+                                    {
+                                        if let TimeView { time } = view.params.read()
+                                        {
+                                            if let Ok(_) = view.state.compare_exchange(
+                                                TTViewState::Changed,
+                                                TTViewState::Processing,
+                                                Ordering::SeqCst,
+                                                Ordering::Acquire,
+                                            )
+                                            {
+                                                if let Some(input) = &self.file.input_data
+                                                {
+                                                    let input_view =
+                                                        input.0.index_axis(Axis(0), time.val);
+                                                    view.update_image(input_view);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            || {
+                                self.file.input_integrated =
+                                    TTInputIntegrated::new(input, self.file.state.clone());
+                                if let Some(_) = &self.file.input_integrated
+                                {
+                                    //file processed correctly
+                                    let _ = self.file.state.compare_exchange(
+                                        FileState::Processing,
+                                        FileState::Ready,
+                                        Ordering::SeqCst,
+                                        Ordering::Acquire,
+                                    );
+                                }
+                            },
+                        );
+                    }
+                    else
+                    {
+                        unreachable!()
+                    }
+                }
+                FileState::Ready =>
+                {
+                    for view in &mut self.views
+                    {
+                        if let Ok(_) = view.state.compare_exchange(
+                            TTViewState::Changed,
+                            TTViewState::Processing,
+                            Ordering::SeqCst,
+                            Ordering::Acquire,
+                        )
+                        {
+                            match view.params.read()
+                            {
+                                TimeView { time } =>
+                                {
+                                    if let Some(input) = &self.file.input_data
+                                    {
+                                        let input_view = input.0.index_axis(Axis(0), time.val);
+                                        view.update_image(input_view);
+                                    }
+                                }
+                                TransformView {
+                                    scale,
+                                    time,
+                                    wavelet,
+                                    mode,
+                                } =>
+                                {
+                                    if let Some(input) = &self.file.input_integrated
+                                    {
+                                        //TODO calculate & display requested waveletet transform
+                                        let input_view = input.0.index_axis(Axis(0), time.val);
+                                        view.update_image(input_view);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    self.check_changed_and_sleep();
+                }
             }
         }
     }
