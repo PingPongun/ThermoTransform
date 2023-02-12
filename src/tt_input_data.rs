@@ -1,5 +1,7 @@
 use atomic_enum::atomic_enum;
 use ndarray::{Array, Array3};
+use rayon::prelude::IntoParallelIterator;
+use rayon::prelude::ParallelIterator;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::prelude::*;
@@ -19,15 +21,19 @@ pub enum FileState
 }
 
 #[derive(PartialEq)]
-pub struct TTInputData(pub Array3<f32>);
-impl Default for TTInputData
+pub struct TTInputData
 {
-    fn default() -> Self { Self(Array3::default((1, 1, 1))) }
+    pub data :    Array3<f32>,
+    pub min_val : f32,
+    pub max_val : f32,
 }
+
 impl TTInputData
 {
     pub fn new(path : &OsString, file_state : Arc<AtomicFileState>) -> Option<Self>
     {
+        let mut min_val = f32::INFINITY;
+        let mut max_val = f32::NEG_INFINITY;
         let f : File = match File::open(path.clone())
         {
             Ok(it) => it,
@@ -82,7 +88,12 @@ impl TTInputData
                                 v_f32.append(
                                     &mut v
                                         .iter()
-                                        .map(|x| x.replace(',', ".").parse::<f32>().unwrap())
+                                        .map(|x| {
+                                            let x = x.replace(',', ".").parse::<f32>().unwrap();
+                                            min_val = min_val.min(x);
+                                            max_val = max_val.max(x);
+                                            x
+                                        })
                                         .collect(),
                                 );
                             }
@@ -101,9 +112,13 @@ impl TTInputData
                 Err(_) => continue,
             };
         }
-
-        Some(TTInputData(
-            Array::from_shape_vec((depths, rows, columns), v_f32).unwrap(),
-        ))
+        let mul = 1.0 / (max_val - min_val);
+        let add = -min_val * mul;
+        v_f32 = v_f32.into_par_iter().map(|x| (x * mul + add)).collect();
+        Some(TTInputData {
+            data : Array::from_shape_vec((depths, rows, columns), v_f32).unwrap(),
+            min_val,
+            max_val,
+        })
     }
 }

@@ -41,30 +41,45 @@ pub struct TTStateBackend
 //=======================================
 impl TTViewBackend
 {
-    fn update_image<'a>(&mut self, array : ArrayView2<'a, f32>) -> ()
+    fn update_image<'a>(&mut self, array : ArrayView2<'a, f32>, max_local_contrast : bool) -> ()
     {
-        let array_iter = array.into_par_iter().cloned();
         let grad = colorgrad::inferno();
-        //find minimal and maximal value of pixel"
-        let (min, max) = array_iter
-            .clone()
-            .fold(
-                || (f32::INFINITY, f32::NEG_INFINITY),
-                |(min, max), x| (min.min(x), max.max(x)),
-            )
-            .reduce(
-                || (f32::INFINITY, f32::NEG_INFINITY),
-                |(min, max), (xmin, xmax)| (min.min(xmin), max.max(xmax)),
-            );
-        let mul = 1.0 / (max - min);
-        let add = -min * mul;
-        let rgb = array_iter
-            .map(|x| {
-                let color = grad.at((x * mul + add).into()).to_rgba8(); //scale value to 0..=1 range
-                [color[0], color[1], color[2]]
-            })
-            .flatten()
-            .collect::<Vec<u8>>();
+        let array_iter = array.into_par_iter().cloned();
+        let rgb;
+        if max_local_contrast
+        {
+            // version providing maximal contrast
+            // find minimal and maximal value of pixel"
+            let (min, max) = array_iter
+                .clone()
+                .fold(
+                    || (f32::INFINITY, f32::NEG_INFINITY),
+                    |(min, max), x| (min.min(x), max.max(x)),
+                )
+                .reduce(
+                    || (f32::INFINITY, f32::NEG_INFINITY),
+                    |(min, max), (xmin, xmax)| (min.min(xmin), max.max(xmax)),
+                );
+            let mul = 1.0 / (max - min);
+            let add = -min * mul;
+            rgb = array_iter
+                .map(|x| {
+                    let color = grad.at((x * mul + add).into()).to_rgba8(); //scale value to 0..=1 range
+                    [color[0], color[1], color[2]]
+                })
+                .flatten()
+                .collect::<Vec<u8>>();
+        }
+        else
+        {
+            rgb = array_iter
+                .map(|x| {
+                    let color = grad.at(x.into()).to_rgba8(); //scale value to 0..=1 range
+                    [color[0], color[1], color[2]]
+                })
+                .flatten()
+                .collect::<Vec<u8>>();
+        }
         let color_image = ColorImage::from_rgb([array.dim().1, array.dim().0], &rgb);
         self.image
             .input_buffer()
@@ -130,7 +145,7 @@ impl TTStateBackend
                         //file loaded correctly
                         self.file
                             .frames
-                            .store(input.0.len_of(ndarray::Axis(0)), Ordering::Relaxed);
+                            .store(input.data.len_of(ndarray::Axis(0)), Ordering::Relaxed);
                         let _ = self.file.state.compare_exchange(
                             FileState::Loading,
                             FileState::Loaded,
@@ -167,8 +182,8 @@ impl TTStateBackend
                                                 if let Some(input) = &self.file.input_data
                                                 {
                                                     let input_view =
-                                                        input.0.index_axis(Axis(0), time.val);
-                                                    view.update_image(input_view);
+                                                        input.data.index_axis(Axis(0), time.val);
+                                                    view.update_image(input_view, false);
                                                 }
                                             }
                                         }
@@ -213,8 +228,8 @@ impl TTStateBackend
                                 {
                                     if let Some(input) = &self.file.input_data
                                     {
-                                        let input_view = input.0.index_axis(Axis(0), time.val);
-                                        view.update_image(input_view);
+                                        let input_view = input.data.index_axis(Axis(0), time.val);
+                                        view.update_image(input_view, false);
                                     }
                                 }
                                 TransformView {
@@ -228,7 +243,7 @@ impl TTStateBackend
                                     {
                                         //TODO calculate & display requested waveletet transform
                                         let input_view = input.0.index_axis(Axis(0), time.val);
-                                        view.update_image(input_view);
+                                        view.update_image(input_view, false);
                                     }
                                 }
                             }
