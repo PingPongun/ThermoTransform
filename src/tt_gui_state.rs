@@ -1,4 +1,4 @@
-use egui::{ColorImage, Context, DragValue, TextureHandle, TextureOptions, Vec2};
+use egui::{Color32, ColorImage, Context, DragValue, Spinner, TextureHandle, TextureOptions, Vec2};
 use egui_extras::{Column, TableBuilder};
 use parking_lot::{Condvar, Mutex};
 use std::ffi::OsString;
@@ -141,8 +141,11 @@ impl TTViewParams
 }
 fn tt_view_new(name : &str, params : TTViewParams, ctx : &Context) -> (TTViewGUI, TTViewBackend)
 {
-    let (image_input, image_output) =
-        triple_buffer(&ctx.load_texture(name, ColorImage::example(), TextureOptions::LINEAR));
+    let (image_input, image_output) = triple_buffer(&ctx.load_texture(
+        name,
+        ColorImage::new([100, 100], Color32::TRANSPARENT),
+        TextureOptions::LINEAR,
+    ));
     let (params_input, params_output) = triple_buffer(&params);
     let state = Arc::new(AtomicTTViewState::new(TTViewState::Invalid));
     (
@@ -232,7 +235,8 @@ impl TTViewGUI
                         }
                         TTViewState::Processing | TTViewState::Changed =>
                         {
-                            ui.spinner();
+                            let rect = ui.image(image.id(), size).rect;
+                            ui.put(rect, Spinner::default());
                         }
                         TTViewState::Invalid => (),
                     }
