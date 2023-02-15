@@ -41,7 +41,7 @@ pub struct TTStateBackend
 //=======================================
 impl TTViewBackend
 {
-    fn update_image<'a>(&mut self, array : ArrayView2<'a, f32>, max_local_contrast : bool) -> ()
+    fn update_image<'a>(&mut self, array : ArrayView2<'a, f64>, max_local_contrast : bool) -> ()
     {
         let grad = colorgrad::inferno();
         let array_iter = array.into_par_iter().cloned();
@@ -53,11 +53,11 @@ impl TTViewBackend
             let (min, max) = array_iter
                 .clone()
                 .fold(
-                    || (f32::INFINITY, f32::NEG_INFINITY),
+                    || (f64::INFINITY, f64::NEG_INFINITY),
                     |(min, max), x| (min.min(x), max.max(x)),
                 )
                 .reduce(
-                    || (f32::INFINITY, f32::NEG_INFINITY),
+                    || (f64::INFINITY, f64::NEG_INFINITY),
                     |(min, max), (xmin, xmax)| (min.min(xmin), max.max(xmax)),
                 );
             let mul = 1.0 / (max - min);

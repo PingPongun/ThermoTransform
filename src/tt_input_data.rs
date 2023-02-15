@@ -23,17 +23,17 @@ pub enum FileState
 #[derive(PartialEq)]
 pub struct TTInputData
 {
-    pub data :    Array3<f32>,
-    pub min_val : f32,
-    pub max_val : f32,
+    pub data :    Array3<f64>,
+    pub min_val : f64,
+    pub max_val : f64,
 }
 
 impl TTInputData
 {
     pub fn new(path : &OsString, file_state : Arc<AtomicFileState>) -> Option<Self>
     {
-        let mut min_val = f32::INFINITY;
-        let mut max_val = f32::NEG_INFINITY;
+        let mut min_val = f64::INFINITY;
+        let mut max_val = f64::NEG_INFINITY;
         let f : File = match File::open(path.clone())
         {
             Ok(it) => it,
@@ -51,7 +51,7 @@ impl TTInputData
         let mut columns : usize = 0;
         let mut rows : usize = 0;
         let mut depths : usize = 0;
-        let mut v_f32 : Vec<f32> = Vec::default();
+        let mut v_f64 : Vec<f64> = Vec::default();
 
         for line in fr.lines()
         // for iline in file_content_string.lines()
@@ -69,7 +69,7 @@ impl TTInputData
                     {
                         let mut v : Vec<&str> = iline.split_whitespace().collect();
 
-                        if let Ok(_) = v[0].replace(',', ".").parse::<f32>()
+                        if let Ok(_) = v[0].replace(',', ".").parse::<f64>()
                         {
                             //if first string in linie is number
                             if parsing_header
@@ -85,11 +85,11 @@ impl TTInputData
                                 v.remove(0); //first number is row id
                                 columns = v.len();
                                 rows += 1;
-                                v_f32.append(
+                                v_f64.append(
                                     &mut v
                                         .iter()
                                         .map(|x| {
-                                            let x = x.replace(',', ".").parse::<f32>().unwrap();
+                                            let x = x.replace(',', ".").parse::<f64>().unwrap();
                                             min_val = min_val.min(x);
                                             max_val = max_val.max(x);
                                             x
@@ -114,9 +114,9 @@ impl TTInputData
         }
         let mul = 1.0 / (max_val - min_val);
         let add = -min_val * mul;
-        v_f32 = v_f32.into_par_iter().map(|x| (x * mul + add)).collect();
+        v_f64 = v_f64.into_par_iter().map(|x| (x * mul + add)).collect();
         Some(TTInputData {
-            data : Array::from_shape_vec((depths, rows, columns), v_f32).unwrap(),
+            data : Array::from_shape_vec((depths, rows, columns), v_f64).unwrap(),
             min_val,
             max_val,
         })
