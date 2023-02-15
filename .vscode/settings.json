@@ -12,7 +12,12 @@
         "**/.git/subtree-cache/**": true,
         "**/target/**": true,
     },
+    // "rust-analyzer.linkedProjects": [
+    //     "solutions_eval\\Cargo.toml",
+    //     "Cargo.toml"
+    // ],
     "rust-analyzer.imports.granularity.group": "module",
-    // "rust-analyzer.cargo.buildScripts.enable": true,
+    "rust-analyzer.cargo.buildScripts.enable": true,
     "rust-analyzer.procMacro.attributes.enable": false,
+    "rust-analyzer.cargo.loadOutDirsFromCheck": true,
 }

@@ -1,0 +1,21 @@
+[package]
+name = "solutions_eval"
+version="0.1.0"
+
+[dependencies]
+criterion = "0.4.0"
+ndarray="0.15.6"
+num-traits="0.2"
+mathru = "0.14"
+peroxide="0.32.1"
+compute="0.2.3"
+bacon-sci="0.13"
+array-init="2.1.0"
+solutions_eval_macros={path="macro/"}
+[lib]
+# proc-macro = true
+path="AntiderivativeBench.rs"
+[[bench]]
+name = "AntiderivativeBench"
+path="AntiderivativeBench.rs"
+harness = false
