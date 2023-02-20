@@ -3,21 +3,19 @@ name = "ThermoTransform"
 version = "0.1.0"
 authors = ["Dawid Lentka <dawid.lentka@outlook.com>"]
 edition = "2021"
-rust-version = "1.65"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 
 [dependencies]
-rayon = "1.6.0"
+rayon = "1.6.1"
 parking_lot="0.12.1"
 triple_buffer = "6.2.0"
 num-complex = "0.4"
-ndarray = { version="0.15.6",features=["rayon"]}
+# ndarray = { version="0.15.6",features=["rayon"]}
+ndarray = {git="https://github.com/PingPongun/ndarray.git", branch = "master",features=["rayon"]}
 egui = "0.21"
-eframe = { version = "0.21.0", features = ["persistence"] }
+eframe = { version = "0.21.3", features = ["persistence"] }
 egui_extras = "0.21.0"
-rfd = {version = "0.11.0", features =["file-handle-inner"]}
+rfd = {version = "0.11.1", features =["file-handle-inner"]}
 colorgrad = "0.6.2"
 futures = "0.3"
 # You only need serde if you want app persistence:
