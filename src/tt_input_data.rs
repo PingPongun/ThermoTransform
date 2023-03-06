@@ -1,4 +1,3 @@
-use atomic_enum::atomic_enum;
 use ndarray::{Array, Array3};
 use rayon::prelude::IntoParallelIterator;
 use rayon::prelude::ParallelIterator;
@@ -8,18 +7,8 @@ use std::io::prelude::*;
 use std::io::BufReader;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-#[atomic_enum]
-#[derive(PartialEq)]
-pub enum FileState
-{
-    None,
-    New,
-    Loading,
-    Loaded,
-    Processing,
-    Ready,
-}
 
+use crate::tt_common::*;
 #[derive(PartialEq)]
 pub struct TTInputData
 {

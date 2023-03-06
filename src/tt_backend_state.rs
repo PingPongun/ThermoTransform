@@ -9,8 +9,9 @@ use triple_buffer as tribuf;
 use triple_buffer::triple_buffer;
 
 use crate::cwt::*;
-use crate::tt_common_state::*;
+use crate::tt_common::*;
 use crate::tt_input_data::*;
+use crate::wavelet::WaveletBank;
 
 //=======================================
 //=================Types=================
@@ -27,14 +28,15 @@ pub struct TTFileBackend
     pub state :            Arc<AtomicFileState>,
     pub path :             tribuf::Output<Option<OsString>>,
     pub input_data :       Option<TTInputData>,
-    pub input_integrated : Option<TTInputIntegrated>,
+    pub input_integrated : Option<TTLazyCWT>,
 }
 pub struct TTStateBackend
 {
-    pub views :     [TTViewBackend; 4],
-    pub changed :   Arc<(Mutex<bool>, Condvar)>,
-    pub stop_flag : Arc<AtomicBool>,
-    pub file :      TTFileBackend,
+    pub views :        [TTViewBackend; 4],
+    pub changed :      Arc<(Mutex<bool>, Condvar)>,
+    pub stop_flag :    Arc<AtomicBool>,
+    pub file :         TTFileBackend,
+    pub wavelet_bank : WaveletBank,
 }
 //=======================================
 //============Implementations============
@@ -107,7 +109,7 @@ impl TTStateBackend
         *mxval = false;
     }
 
-    pub fn run(&mut self) -> ()
+    pub fn run(mut self) -> ()
     {
         while self.stop_flag.load(Ordering::Relaxed) == false
         {
@@ -161,6 +163,7 @@ impl TTStateBackend
                 {
                     if let Some(input) = &self.file.input_data
                     {
+                        self.file.input_integrated = None;
                         rayon::join(
                             || {
                                 //continously update time views if necessary
@@ -170,7 +173,7 @@ impl TTStateBackend
                                 {
                                     for view in &mut self.views
                                     {
-                                        if let TimeView { time } = view.params.read()
+                                        if let TimeView(time) = view.params.read()
                                         {
                                             if let Ok(_) = view.state.compare_exchange(
                                                 TTViewState::Changed,
@@ -192,7 +195,8 @@ impl TTStateBackend
                             },
                             || {
                                 self.file.input_integrated =
-                                    TTInputIntegrated::new(input, self.file.state.clone());
+                                    TTLazyCWT::new(&input.data, self.file.state.clone());
+
                                 if let Some(_) = &self.file.input_integrated
                                 {
                                     //file processed correctly
@@ -224,7 +228,7 @@ impl TTStateBackend
                         {
                             match view.params.read()
                             {
-                                TimeView { time } =>
+                                TimeView(time) =>
                                 {
                                     if let Some(input) = &self.file.input_data
                                     {
@@ -232,18 +236,13 @@ impl TTStateBackend
                                         view.update_image(input_view, false);
                                     }
                                 }
-                                TransformView {
-                                    scale,
-                                    time,
-                                    wavelet,
-                                    mode,
-                                } =>
+                                TransformView(params) =>
                                 {
-                                    if let Some(input) = &self.file.input_integrated
+                                    if let Some(cwt) = &self.file.input_integrated
                                     {
-                                        //TODO calculate & display requested waveletet transform
-                                        let input_view = input.0.index_axis(Axis(0), time.val);
-                                        view.update_image(input_view, false);
+                                        //calculate & display requested waveletet transform
+                                        let cwt_view = cwt.cwt(&mut self.wavelet_bank, params);
+                                        view.update_image(cwt_view.view(), true);
                                     }
                                 }
                             }

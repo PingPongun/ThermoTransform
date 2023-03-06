@@ -1,3 +1,4 @@
+use ndarray::Array2;
 use ndarray::Array3;
 use ndarray::ArrayView1;
 use ndarray::ArrayViewMut1;
@@ -9,7 +10,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use strum_macros::{EnumString, EnumVariantNames};
 
-use crate::tt_input_data::*;
+use crate::tt_common::*;
+use crate::wavelet::*;
 
 #[derive(
     Clone, Copy, PartialEq, Debug, Default, strum_macros::AsRefStr, EnumString, EnumVariantNames,
@@ -22,15 +24,6 @@ pub enum WtResultMode
     Magnitude,
     Real,
     Imaginary,
-}
-#[derive(
-    Clone, Copy, PartialEq, Debug, Default, strum_macros::AsRefStr, EnumString, EnumVariantNames,
-)]
-#[strum(serialize_all = "title_case")]
-pub enum WaveletType
-{
-    #[default]
-    Morlet,
 }
 type Integrals = [f64; 4];
 
@@ -102,17 +95,25 @@ fn gen_integrals(non_integrated : ArrayView1<'_, f64>, mut integrals : ArrayView
     }
 }
 
-pub struct TTInputIntegrated(pub Array3<Integrals>);
-impl TTInputIntegrated
+pub struct TTLazyCWT
 {
-    pub fn new(input : &TTInputData, file_state : Arc<AtomicFileState>)
-        -> Option<TTInputIntegrated>
+    integrals : Array3<Integrals>,
+}
+impl TTLazyCWT
+{
+    pub fn new(input : &Array3<f64>, file_state : Arc<AtomicFileState>) -> Option<TTLazyCWT>
     {
-        let shape_raw = input.data.raw_dim();
-        let mut integrated = TTInputIntegrated(Array3::<Integrals>::default(shape_raw));
+        let shape_raw = input.raw_dim();
+        let mut integrated = TTLazyCWT {
+            integrals : Array3::<Integrals>::default(shape_raw),
+        };
 
-        let integrated_iter = integrated.0.lanes_mut(Axis(0)).into_iter().into_par_iter();
-        let time_iter = input.data.lanes(Axis(0)).into_iter().into_par_iter();
+        let integrated_iter = integrated
+            .integrals
+            .lanes_mut(Axis(0))
+            .into_iter()
+            .into_par_iter();
+        let time_iter = input.lanes(Axis(0)).into_iter().into_par_iter();
         let iter = IndexedParallelIterator::zip(time_iter, integrated_iter);
         iter.for_each(|(lane_non_integrated, lane_integrals)| {
             if FileState::Processing == file_state.load(Ordering::Relaxed)
@@ -129,5 +130,10 @@ impl TTInputIntegrated
         {
             None
         }
+    }
+    pub fn cwt(&self, wavelet_bank : &mut WaveletBank, params : &TransformViewParams)
+        -> Array2<f64>
+    {
+        Array2::default((self.integrals.dim().1, self.integrals.dim().2))
     }
 }

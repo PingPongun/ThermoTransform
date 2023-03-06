@@ -11,8 +11,8 @@ use triple_buffer::triple_buffer;
 
 use crate::cwt::*;
 use crate::tt_backend_state::*;
-use crate::tt_common_state::*;
-use crate::tt_input_data::*;
+use crate::tt_common::*;
+use crate::wavelet::{WaveletBank, WaveletBankTrait, WaveletType};
 
 //=======================================
 //=================Types=================
@@ -110,26 +110,21 @@ impl TTViewParams
             retval.0 |= self.show_combobox(ui);
             match self
             {
-                TransformView {
-                    scale,
-                    time,
-                    wavelet,
-                    mode,
-                } =>
+                TransformView(params) =>
                 {
                     ui.style_mut().wrap = Some(false);
                     ui.label("| mode:");
-                    retval.0 |= mode.show_combobox(ui);
+                    retval.0 |= params.mode.show_combobox(ui);
                     ui.style_mut().wrap = Some(false);
                     ui.label("| wavelet:");
-                    retval.0 |= wavelet.show_combobox(ui);
+                    retval.0 |= params.wavelet.show_combobox(ui);
                     ui.label("| scale:");
-                    retval.1 |= scale.show(ui);
+                    retval.1 |= params.scale.show(ui);
                     retval.0 |= retval.1;
                     ui.label("| frame:");
-                    retval.0 |= time.show(ui);
+                    retval.0 |= params.time.show(ui);
                 }
-                TimeView { time } =>
+                TimeView(time) =>
                 {
                     ui.label("| frame:");
                     retval.0 |= time.show(ui);
@@ -183,20 +178,14 @@ impl TTViewGUI
                 retval = true;
                 if scale_changed
                 {
-                    if let TransformView {
-                        scale,
-                        mut time,
-                        wavelet,
-                        mode,
-                    } = *self.params.input_buffer()
+                    if let TransformView(mut params) = *self.params.input_buffer()
                     {
-                        time.max = scale.max - scale.val;
-                        (*self.params.input_buffer()) = TransformView {
-                            scale,
-                            time,
-                            wavelet,
-                            mode,
-                        };
+                        let out_count = params.scale.val - params.scale.min;
+                        let out_count_half = out_count >> 1;
+                        let out_count_half_larger = out_count - out_count_half;
+                        params.time.max = params.scale.max - 1 - out_count_half_larger;
+                        params.time.min = params.scale.min - 1 + out_count_half;
+                        (*self.params.input_buffer()) = TransformView(params);
                     }
                 }
 
@@ -252,24 +241,10 @@ impl TTStateGUI
     pub fn new(ctx : &egui::Context) -> Self
     {
         let default_view_params = [
-            TimeView {
-                time : RangedVal::default(),
-            },
-            TransformView {
-                scale :   RangedVal::default(),
-                time :    RangedVal::default(),
-                wavelet : WaveletType::Morlet,
-                mode :    WtResultMode::Phase,
-            },
-            TransformView {
-                scale :   RangedVal::default(),
-                time :    RangedVal::default(),
-                wavelet : WaveletType::Morlet,
-                mode :    WtResultMode::Magnitude,
-            },
-            TimeView {
-                time : RangedVal::default(),
-            },
+            TTViewParams::time_default(),
+            TTViewParams::transform_wavelet(WaveletType::Morlet, WtResultMode::Phase),
+            TTViewParams::transform_wavelet(WaveletType::Morlet, WtResultMode::Magnitude),
+            TTViewParams::time_default(),
         ];
         // let (mut views_gui, mut views_backend) : ([TTViewGUI; 4], [TTViewBackend; 4]) =
         let [(g1,b1),(g2,b2),(g3,b3),(g4,b4)] //: [(TTViewGUI, TTViewBackend); 4] 
@@ -277,29 +252,33 @@ impl TTStateGUI
 
         let (path_gui, path_backend) = triple_buffer(&None);
 
-        let backend = TTStateBackend {
-            views :     [b1, b2, b3, b4],
-            changed :   Arc::new((Mutex::new(false), Condvar::new())),
-            stop_flag : Arc::new(AtomicBool::new(false)),
-            file :      TTFileBackend {
-                frames :           Arc::new(AtomicUsize::new(0)),
-                state :            Arc::new(AtomicFileState::new(FileState::None)),
-                path :             path_backend,
-                input_data :       None,
-                input_integrated : None,
-            },
-        };
+        let changed = Arc::new((Mutex::new(false), Condvar::new()));
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let frames = Arc::new(AtomicUsize::new(0));
+        let state = Arc::new(AtomicFileState::new(FileState::None));
         TTStateGUI {
             views :          [g1, g2, g3, g4],
-            changed :        backend.changed.clone(),
-            stop_flag :      backend.stop_flag.clone(),
+            changed :        changed.clone(),
+            stop_flag :      stop_flag.clone(),
             file :           TTFileGUI {
-                frames : backend.file.frames.clone(),
-                state :  backend.file.state.clone(),
+                frames : frames.clone(),
+                state :  state.clone(),
                 path :   path_gui,
             },
             backend_handle : Some(thread::spawn(move || {
-                let mut backend_state = backend;
+                let backend_state = TTStateBackend {
+                    views : [b1, b2, b3, b4],
+                    changed,
+                    stop_flag,
+                    file : TTFileBackend {
+                        frames,
+                        state,
+                        path : path_backend,
+                        input_data : None,
+                        input_integrated : None,
+                    },
+                    wavelet_bank : WaveletBank::new_wb(),
+                };
                 backend_state.run();
             })),
         }
@@ -361,28 +340,18 @@ impl TTStateGUI
                             let mut params = (*view.params.input_buffer()).clone();
                             match params
                             {
-                                TransformView {
-                                    mut scale,
-                                    mut time,
-                                    wavelet,
-                                    mode,
-                                } =>
+                                TransformView(mut tparams) =>
                                 {
-                                    scale.max = frames;
-                                    scale.val = 1;
-                                    scale.min = 1;
-                                    time.max = scale.max - scale.val;
-                                    params = TransformView {
-                                        scale,
-                                        time,
-                                        wavelet,
-                                        mode,
-                                    }
+                                    tparams.scale.max = frames;
+                                    tparams.scale.val = 1;
+                                    tparams.scale.min = 1;
+                                    tparams.time.max = tparams.scale.max - tparams.scale.val;
+                                    params = TransformView(tparams)
                                 }
-                                TimeView { mut time } =>
+                                TimeView(mut time) =>
                                 {
                                     time.max = frames - 1;
-                                    params = TimeView { time };
+                                    params = TimeView(time);
                                 }
                             }
                             //update backend buffer
