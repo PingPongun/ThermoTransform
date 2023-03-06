@@ -23,6 +23,7 @@ serde = { version = "1", features = ["derive"] }
 strum = "0.24"
 strum_macros = "0.24"
 atomic_enum = "0.2.0"
+mathru="0.14"
 
 # native:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
