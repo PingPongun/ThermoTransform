@@ -11,7 +11,7 @@ use triple_buffer::triple_buffer;
 use crate::cwt::*;
 use crate::tt_common::*;
 use crate::tt_input_data::*;
-use crate::wavelet::WaveletBank;
+use crate::wavelet::{WaveletBank, WaveletBankTrait};
 
 //=======================================
 //=================Types=================
@@ -22,21 +22,22 @@ pub struct TTViewBackend
     pub image :  tribuf::Input<TextureHandle>,
     pub params : tribuf::Output<TTViewParams>,
 }
-pub struct TTFileBackend
+struct TTFileBackend
 {
-    pub frames :           Arc<AtomicUsize>,
-    pub state :            Arc<AtomicFileState>,
-    pub path :             tribuf::Output<Option<OsString>>,
-    pub input_data :       Option<TTInputData>,
-    pub input_integrated : Option<TTLazyCWT>,
+    frames :     Arc<AtomicUsize>,
+    state :      Arc<AtomicFileState>,
+    path :       tribuf::Output<Option<OsString>>,
+    input_data : Option<TTInputData>,
+    lazy_cwt :   Option<TTLazyCWT>,
 }
+
 pub struct TTStateBackend
 {
-    pub views :        [TTViewBackend; 4],
-    pub changed :      Arc<(Mutex<bool>, Condvar)>,
-    pub stop_flag :    Arc<AtomicBool>,
-    pub file :         TTFileBackend,
-    pub wavelet_bank : WaveletBank,
+    views :           [TTViewBackend; 4],
+    changed :         Arc<(Mutex<bool>, Condvar)>,
+    stop_flag :       Arc<AtomicBool>,
+    file :            TTFileBackend,
+    wavelet_bank :    WaveletBank,
 }
 //=======================================
 //============Implementations============
@@ -95,8 +96,43 @@ impl TTViewBackend
         );
     }
 }
+impl TTFileBackend
+{
+    pub fn new(
+        frames : Arc<AtomicUsize>,
+        state : Arc<AtomicFileState>,
+        path : tribuf::Output<Option<OsString>>,
+    ) -> Self
+    {
+        Self {
+            frames,
+            state,
+            path,
+            input_data : None,
+            lazy_cwt : None,
+        }
+    }
+}
 impl TTStateBackend
 {
+    pub fn new(
+        views : [TTViewBackend; 4],
+        changed : Arc<(Mutex<bool>, Condvar)>,
+        stop_flag : Arc<AtomicBool>,
+        frames : Arc<AtomicUsize>,
+        state : Arc<AtomicFileState>,
+        path : tribuf::Output<Option<OsString>>,
+    ) -> Self
+    {
+        Self {
+            views,
+            changed,
+            stop_flag,
+            file : TTFileBackend::new(frames, state, path),
+            wavelet_bank : WaveletBank::new_wb(),
+        }
+    }
+
     fn check_changed_and_sleep(&mut self) -> ()
     {
         let &(ref mx, ref cvar) = &*self.changed;
@@ -108,7 +144,6 @@ impl TTStateBackend
         }
         *mxval = false;
     }
-
     pub fn run(mut self) -> ()
     {
         while self.stop_flag.load(Ordering::Relaxed) == false
@@ -118,7 +153,7 @@ impl TTStateBackend
                 FileState::None =>
                 {
                     self.file.input_data = None;
-                    self.file.input_integrated = None;
+                    self.file.lazy_cwt = None;
                     self.check_changed_and_sleep();
                 }
                 FileState::New =>
@@ -133,7 +168,7 @@ impl TTStateBackend
                 }
                 FileState::Loading =>
                 {
-                    self.file.input_integrated = None;
+                    self.file.lazy_cwt = None;
                     if let Some(path) = self.file.path.read()
                     {
                         self.file.input_data = TTInputData::new(path, self.file.state.clone());
@@ -163,7 +198,7 @@ impl TTStateBackend
                 {
                     if let Some(input) = &self.file.input_data
                     {
-                        self.file.input_integrated = None;
+                        self.file.lazy_cwt = None;
                         rayon::join(
                             || {
                                 //continously update time views if necessary
@@ -194,10 +229,10 @@ impl TTStateBackend
                                 }
                             },
                             || {
-                                self.file.input_integrated =
+                                self.file.lazy_cwt =
                                     TTLazyCWT::new(&input.data, self.file.state.clone());
 
-                                if let Some(_) = &self.file.input_integrated
+                                if let Some(_) = &self.file.lazy_cwt
                                 {
                                     //file processed correctly
                                     let _ = self.file.state.compare_exchange(
@@ -238,7 +273,7 @@ impl TTStateBackend
                                 }
                                 TransformView(params) =>
                                 {
-                                    if let Some(cwt) = &self.file.input_integrated
+                                    if let Some(cwt) = &self.file.lazy_cwt
                                     {
                                         //calculate & display requested waveletet transform
                                         let cwt_view = cwt.cwt(&mut self.wavelet_bank, params);

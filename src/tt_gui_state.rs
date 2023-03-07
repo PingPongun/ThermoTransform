@@ -12,7 +12,7 @@ use triple_buffer::triple_buffer;
 use crate::cwt::*;
 use crate::tt_backend_state::*;
 use crate::tt_common::*;
-use crate::wavelet::{WaveletBank, WaveletBankTrait, WaveletType};
+use crate::wavelet::WaveletType;
 
 //=======================================
 //=================Types=================
@@ -266,19 +266,14 @@ impl TTStateGUI
                 path :   path_gui,
             },
             backend_handle : Some(thread::spawn(move || {
-                let backend_state = TTStateBackend {
-                    views : [b1, b2, b3, b4],
+                let backend_state = TTStateBackend::new(
+                    [b1, b2, b3, b4],
                     changed,
                     stop_flag,
-                    file : TTFileBackend {
-                        frames,
-                        state,
-                        path : path_backend,
-                        input_data : None,
-                        input_integrated : None,
-                    },
-                    wavelet_bank : WaveletBank::new_wb(),
-                };
+                    frames,
+                    state,
+                    path_backend,
+                );
                 backend_state.run();
             })),
         }
