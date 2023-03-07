@@ -232,7 +232,6 @@ impl TTLazyCWT
                 }
             })
             .collect();
-        Array2::from_shape_vec((shape.1, shape.2), v).unwrap();
-        Array2::default((self.integrals.dim().1, self.integrals.dim().2))
+        Array2::from_shape_vec((shape.1, shape.2), v).unwrap()
     }
 }
