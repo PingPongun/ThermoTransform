@@ -1,4 +1,4 @@
-use egui::{Color32, ColorImage, Context, DragValue, Spinner, TextureHandle, TextureOptions, Vec2};
+use egui::{Color32, ColorImage, Context, DragValue, Spinner, TextureOptions, Vec2};
 use egui_extras::{Column, TableBuilder};
 use parking_lot::{Condvar, Mutex};
 use std::ffi::OsString;
@@ -21,7 +21,7 @@ use crate::wavelet::WaveletType;
 pub struct TTViewGUI
 {
     state :  Arc<AtomicTTViewState>,
-    image :  tribuf::Output<TextureHandle>,
+    image :  tribuf::Output<Thermogram>,
     params : tribuf::Input<TTViewParams>,
 }
 
@@ -98,6 +98,77 @@ impl RangedVal
             .changed()
     }
 }
+impl Thermogram
+{
+    fn show(&self, ui : &mut egui::Ui) -> egui::InnerResponse<()>
+    {
+        let available_size = ui.available_size();
+        let image_aspect = self.image.aspect_ratio();
+        let size = if (available_size.x / available_size.y) > image_aspect
+        {
+            //available space is proportionaly wider than original image
+            Vec2 {
+                x : available_size.y * image_aspect,
+                y : available_size.y,
+            }
+        }
+        else
+        {
+            //available space is proportionaly taller than original image
+            Vec2 {
+                x : available_size.x,
+                y : available_size.x / image_aspect,
+            }
+        };
+        ui.horizontal_centered(|ui| {
+            ui.image(self.image.id(), size);
+            ui.add_space(5.0);
+            ui.vertical(|ui| {
+                ui.add_space(6.0);
+                ui.image(
+                    self.legend.grad_legend().id(),
+                    Vec2 {
+                        x : 10.0,
+                        y : size.y - 10.0,
+                    },
+                );
+                ui.add_space(4.0);
+            });
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+                let ava_space = ui.available_height();
+                let label_height = ui
+                    .label(self.scale[self.scale.len() - 1].to_string())
+                    .rect
+                    .height();
+                let n = ava_space / label_height;
+                let (stride, label_count) = if n >= 33.0
+                {
+                    (1, 33)
+                }
+                else if n >= 17.0
+                {
+                    (2, 17)
+                }
+                else if n >= 9.0
+                {
+                    (4, 9)
+                }
+                else
+                {
+                    (8, 5)
+                };
+                let labels_height_sum = label_height * label_count as f32 + 2.0;
+                let spacing_height = (ava_space - labels_height_sum) / (label_count - 1) as f32;
+                for i in (0..(label_count - 1)).rev()
+                {
+                    ui.add_space(spacing_height);
+                    ui.label(self.scale[i * stride].to_string());
+                }
+            });
+        })
+    }
+}
 impl TTViewParams
 {
     ///#Returns (a,b)
@@ -136,11 +207,11 @@ impl TTViewParams
 }
 fn tt_view_new(name : &str, params : TTViewParams, ctx : &Context) -> (TTViewGUI, TTViewBackend)
 {
-    let (image_input, image_output) = triple_buffer(&ctx.load_texture(
+    let (image_input, image_output) = triple_buffer(&Thermogram::new(ctx.load_texture(
         name,
         ColorImage::new([100, 100], Color32::TRANSPARENT),
         TextureOptions::LINEAR,
-    ));
+    )));
     let (params_input, params_output) = triple_buffer(&params);
     let state = Arc::new(AtomicTTViewState::new(TTViewState::Invalid));
     (
@@ -150,9 +221,9 @@ fn tt_view_new(name : &str, params : TTViewParams, ctx : &Context) -> (TTViewGUI
             params : params_input,
         },
         TTViewBackend {
-            state :  state,
-            image :  image_input,
-            params : params_output,
+            state :      state,
+            thermogram : image_input,
+            params :     params_output,
         },
     )
 }
@@ -194,37 +265,19 @@ impl TTViewGUI
                 self.params.publish();
                 *self.params.input_buffer() = temp;
             }
-            let image = self.image.read();
+            let gram = self.image.read();
             ui.with_layout(
                 egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
                 |ui| {
-                    let available_size = ui.available_size();
-                    let image_aspect = image.aspect_ratio();
-                    let size = if (available_size.x / available_size.y) > image_aspect
-                    {
-                        //available space is proportionaly wider than original image
-                        Vec2 {
-                            x : available_size.y * image_aspect,
-                            y : available_size.y,
-                        }
-                    }
-                    else
-                    {
-                        //available space is proportionaly taller than original image
-                        Vec2 {
-                            x : available_size.x,
-                            y : available_size.x / image_aspect,
-                        }
-                    };
                     match self.state.load(Ordering::Relaxed)
                     {
                         TTViewState::Valid =>
                         {
-                            ui.image(image.id(), size);
+                            gram.show(ui);
                         }
                         TTViewState::Processing | TTViewState::Changed =>
                         {
-                            let rect = ui.image(image.id(), size).rect;
+                            let rect = gram.show(ui).response.rect;
                             ui.put(rect, Spinner::default());
                         }
                         TTViewState::Invalid => (),
@@ -240,6 +293,7 @@ impl TTStateGUI
 {
     pub fn new(ctx : &egui::Context) -> Self
     {
+        TTGradients::init_grad(ctx);
         let default_view_params = [
             TTViewParams::time_default(),
             TTViewParams::transform_wavelet(WaveletType::Morlet, WtResultMode::Phase),

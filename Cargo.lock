@@ -13,6 +13,7 @@ dependencies = [
  "egui",
  "egui_extras",
  "futures",
+ "lazy_static",
  "mathru",
  "ndarray",
  "num-complex",
