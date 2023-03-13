@@ -1,7 +1,6 @@
 use atomic_enum::atomic_enum;
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 use lazy_static::*;
-use std::f64::consts::PI;
 use std::iter;
 use std::str::FromStr;
 use strum::VariantNames;
@@ -48,10 +47,10 @@ pub struct Thermogram
 {
     pub image :  TextureHandle,
     pub legend : TTGradients,
-    pub scale :  [f32; 33],
+    pub scale :  [f64; 33],
 }
 
-#[derive(Clone, strum_macros::AsRefStr)]
+#[derive(Clone, PartialEq, strum_macros::AsRefStr)]
 pub enum TTGradients
 {
     Linear,
@@ -567,7 +566,6 @@ lazy_static! {
             colorgrad::Color::new(0.963596, 0.523740, 0.983677, 1.0),
             colorgrad::Color::new(0.970035, 0.522293, 0.977792, 1.0),
         ])
-        .domain(&[-PI, PI])
         .interpolation(colorgrad::Interpolation::Linear)
         .build()
         .unwrap();

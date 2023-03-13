@@ -2,6 +2,8 @@ use egui::{ColorImage, TextureOptions};
 use ndarray::{ArrayView2, Axis};
 use parking_lot::{Condvar, Mutex};
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
+use rayon::slice::ParallelSliceMut;
+use std::f64::consts::{FRAC_1_PI, PI};
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -45,54 +47,76 @@ pub struct TTStateBackend
 //=======================================
 impl TTViewBackend
 {
-    fn update_image<'a>(
-        &mut self,
-        array : ArrayView2<'a, f64>,
-        scale_values : bool,
-        grad : TTGradients,
-    ) -> ()
+    fn update_image<'a>(&mut self, array : ArrayView2<'a, f64>, grad : TTGradients) -> ()
     {
         let array_iter = array.into_par_iter().cloned();
         let rgb;
         let gram = self.thermogram.input_buffer();
-        if scale_values
+
+        let mut array_vec = array.as_slice_memory_order().unwrap().to_vec();
+        if grad == TTGradients::Phase
         {
-            // version providing maximal contrast
-            // find minimal and maximal value of pixel"
-            let (min, max) = array_iter
-                .clone()
-                .fold(
-                    || (f64::INFINITY, f64::NEG_INFINITY),
-                    |(min, max), x| (min.min(x), max.max(x)),
+            //for phase gradient force -PI & PI as extreme vals
+            array_vec.push(-PI);
+            array_vec.push(PI);
+        }
+        array_vec
+            .as_parallel_slice_mut()
+            .sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        let quantile_count = (array_vec.len() - 1) as f64 / 32.0;
+        gram.scale.iter_mut().enumerate().for_each(|(idx, val)| {
+            *val = array_vec[(quantile_count * idx as f64).round() as usize]
+        });
+        let quantile_out_width = 1.0 / 33.0;
+        let mul_add_coef : Vec<(_, _)> = gram
+            .scale
+            .windows(2)
+            .zip((0..32).map(|x| {
+                (
+                    x as f64 * quantile_out_width,
+                    (x + 1) as f64 * quantile_out_width,
                 )
-                .reduce(
-                    || (f64::INFINITY, f64::NEG_INFINITY),
-                    |(min, max), (xmin, xmax)| (min.min(xmin), max.max(xmax)),
-                );
-            let mul = 1.0 / (max - min);
-            let add = -min * mul;
-            rgb = array_iter
-                .map(|x| {
-                    let color = grad.raw_grad().at((x * mul + add).into()).to_rgba8(); //scale value to 0..=1 range
-                    [color[0], color[1], color[2]]
-                })
-                .flatten()
-                .collect::<Vec<u8>>();
-        }
-        else
-        {
-            rgb = array_iter
-                .map(|x| {
-                    let color = grad.raw_grad().at(x.into()).to_rgba8();
-                    [color[0], color[1], color[2]]
-                })
-                .flatten()
-                .collect::<Vec<u8>>();
-        }
+            }))
+            .map(|(x, (ymin, ymax))| {
+                let (xmin, xmax) = (x[0], x[1]);
+                let mul = (ymax - ymin) / (xmax - xmin);
+                let add = ymin - xmin * mul;
+                (mul, add)
+            })
+            .collect();
+        rgb = array_iter
+            .map(|x| {
+                let color;
+                match gram.scale.binary_search_by(|a| a.partial_cmp(&x).unwrap())
+                {
+                    Ok(idx) =>
+                    {
+                        color = grad
+                            .raw_grad()
+                            .at(quantile_out_width * idx as f64)
+                            .to_rgba8();
+                    }
+                    Err(idx) =>
+                    {
+                        //idx will always be in range <1;32>
+                        let (mul, add) = mul_add_coef[idx - 1];
+                        color = grad.raw_grad().at(f64::mul_add(x, mul, add)).to_rgba8();
+                    }
+                };
+                [color[0], color[1], color[2]]
+            })
+            .flatten()
+            .collect::<Vec<u8>>();
         let color_image = ColorImage::from_rgb([array.dim().1, array.dim().0], &rgb);
         gram.image.set(color_image, TextureOptions::LINEAR);
+        if grad == TTGradients::Phase
+        {
+            //for phase scale values to degrees
+            gram.scale
+                .iter_mut()
+                .for_each(|x| *x = *x * FRAC_1_PI * 180.0 + 180.0);
+        }
         gram.legend = grad;
-        gram.scale = [0.0; 33];
         self.thermogram.publish();
         let _ = self.state.compare_exchange(
             TTViewState::Processing,
@@ -229,7 +253,6 @@ impl TTStateBackend
                                                         input.data.index_axis(Axis(0), time.val);
                                                     view.update_image(
                                                         input_view,
-                                                        false,
                                                         TTGradients::Linear,
                                                     );
                                                 }
@@ -278,7 +301,7 @@ impl TTStateBackend
                                     if let Some(input) = &self.file.input_data
                                     {
                                         let input_view = input.data.index_axis(Axis(0), time.val);
-                                        view.update_image(input_view, false, TTGradients::Linear);
+                                        view.update_image(input_view, TTGradients::Linear);
                                     }
                                 }
                                 TransformView(params) =>
@@ -289,19 +312,11 @@ impl TTStateBackend
                                         let cwt_view = cwt.cwt(&mut self.wavelet_bank, params);
                                         if params.mode == WtResultMode::Phase
                                         {
-                                            view.update_image(
-                                                cwt_view.view(),
-                                                false,
-                                                TTGradients::Phase,
-                                            );
+                                            view.update_image(cwt_view.view(), TTGradients::Phase);
                                         }
                                         else
                                         {
-                                            view.update_image(
-                                                cwt_view.view(),
-                                                true,
-                                                TTGradients::Linear,
-                                            );
+                                            view.update_image(cwt_view.view(), TTGradients::Linear);
                                         };
                                     }
                                 }
