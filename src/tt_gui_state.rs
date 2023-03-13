@@ -1,4 +1,17 @@
-use egui::{Color32, ColorImage, Context, DragValue, Spinner, TextureOptions, Vec2};
+use egui::{
+    Color32,
+    ColorImage,
+    Context,
+    DragValue,
+    Image,
+    Pos2,
+    Rect,
+    Sense,
+    Spinner,
+    Stroke,
+    TextureOptions,
+    Vec2,
+};
 use egui_extras::{Column, TableBuilder};
 use parking_lot::{Condvar, Mutex};
 use std::ffi::OsString;
@@ -23,6 +36,7 @@ pub struct TTViewGUI
     state :  Arc<AtomicTTViewState>,
     image :  tribuf::Output<Thermogram>,
     params : tribuf::Input<TTViewParams>,
+    roi :    Arc<SemiAtomicRect>,
 }
 
 pub struct TTFileGUI
@@ -30,6 +44,7 @@ pub struct TTFileGUI
     frames : Arc<AtomicUsize>,
     state :  Arc<AtomicFileState>,
     path :   tribuf::Input<Option<OsString>>,
+    roi :    Arc<SemiAtomicRect>,
 }
 
 pub struct TTStateGUI
@@ -100,7 +115,7 @@ impl RangedVal
 }
 impl Thermogram
 {
-    fn show(&self, ui : &mut egui::Ui) -> egui::InnerResponse<()>
+    fn show(&self, ui : &mut egui::Ui, roi : &Arc<SemiAtomicRect>) -> egui::InnerResponse<()>
     {
         let available_size = ui.available_size();
         let image_aspect = self.image.aspect_ratio();
@@ -121,7 +136,46 @@ impl Thermogram
             }
         };
         ui.horizontal_centered(|ui| {
-            ui.image(self.image.id(), size);
+            let img_rsp = ui.add(Image::new(self.image.id(), size).sense(Sense::click()));
+            let size = img_rsp.rect.size();
+            let roi_min = roi.min.get();
+            let roi_max = roi.max.get();
+            let full_size = roi.full_size.get();
+            if img_rsp.clicked()
+            {
+                //left click
+                let click_pos = img_rsp.interact_pointer_pos().unwrap();
+                roi.set_max((
+                    (full_size.0 as f32 * (click_pos.x - img_rsp.rect.min.x) / size.x) as u16,
+                    (full_size.1 as f32 * (click_pos.y - img_rsp.rect.min.y) / size.y) as u16,
+                ));
+            }
+            else if img_rsp.secondary_clicked()
+            {
+                //right click
+                let click_pos = img_rsp.interact_pointer_pos().unwrap();
+                roi.set_min((
+                    (full_size.0 as f32 * (click_pos.x - img_rsp.rect.min.x) / size.x) as u16,
+                    (full_size.1 as f32 * (click_pos.y - img_rsp.rect.min.y) / size.y) as u16,
+                ));
+            }
+            else
+            { //roi has not changed/ image not clicked
+            }
+            ui.painter_at(img_rsp.rect).rect_stroke(
+                Rect {
+                    min : Pos2::new(
+                        roi_min.0 as f32 / full_size.0 as f32 * size.x + img_rsp.rect.min.x,
+                        roi_min.1 as f32 / full_size.1 as f32 * size.y + img_rsp.rect.min.y,
+                    ),
+                    max : Pos2::new(
+                        roi_max.0 as f32 / full_size.0 as f32 * size.x + img_rsp.rect.min.x,
+                        roi_max.1 as f32 / full_size.1 as f32 * size.y + img_rsp.rect.min.y,
+                    ),
+                },
+                0.0,
+                Stroke::new(3.0, Color32::YELLOW),
+            );
             ui.add_space(5.0);
             ui.vertical(|ui| {
                 ui.add_space(6.0);
@@ -205,7 +259,12 @@ impl TTViewParams
         retval
     }
 }
-fn tt_view_new(name : &str, params : TTViewParams, ctx : &Context) -> (TTViewGUI, TTViewBackend)
+fn tt_view_new(
+    name : &str,
+    params : TTViewParams,
+    ctx : &Context,
+    roi : Arc<SemiAtomicRect>,
+) -> (TTViewGUI, TTViewBackend)
 {
     let (image_input, image_output) = triple_buffer(&Thermogram::new(ctx.load_texture(
         name,
@@ -219,11 +278,13 @@ fn tt_view_new(name : &str, params : TTViewParams, ctx : &Context) -> (TTViewGUI
             state :  state.clone(),
             image :  image_output,
             params : params_input,
+            roi :    roi.clone(),
         },
         TTViewBackend {
             state :      state,
             thermogram : image_input,
             params :     params_output,
+            roi :        roi.clone(),
         },
     )
 }
@@ -273,11 +334,11 @@ impl TTViewGUI
                     {
                         TTViewState::Valid =>
                         {
-                            gram.show(ui);
+                            gram.show(ui, &self.roi);
                         }
                         TTViewState::Processing | TTViewState::Changed =>
                         {
-                            let rect = gram.show(ui).response.rect;
+                            let rect = gram.show(ui, &self.roi).response.rect;
                             ui.put(rect, Spinner::default());
                         }
                         TTViewState::Invalid => (),
@@ -300,9 +361,10 @@ impl TTStateGUI
             TTViewParams::transform_wavelet(WaveletType::Morlet, WtResultMode::Magnitude),
             TTViewParams::time_default(),
         ];
+        let roi = Arc::new(SemiAtomicRect::new((0, 0), (1, 1), (1, 1)));
         // let (mut views_gui, mut views_backend) : ([TTViewGUI; 4], [TTViewBackend; 4]) =
         let [(g1,b1),(g2,b2),(g3,b3),(g4,b4)] //: [(TTViewGUI, TTViewBackend); 4] 
-        = default_view_params.map( |x| tt_view_new("TTParams",x, ctx));
+        = default_view_params.map( |x| tt_view_new("TTParams",x, ctx,roi.clone()));
 
         let (path_gui, path_backend) = triple_buffer(&None);
 
@@ -318,6 +380,7 @@ impl TTStateGUI
                 frames : frames.clone(),
                 state :  state.clone(),
                 path :   path_gui,
+                roi :    roi.clone(),
             },
             backend_handle : Some(thread::spawn(move || {
                 let backend_state = TTStateBackend::new(
@@ -327,6 +390,7 @@ impl TTStateGUI
                     frames,
                     state,
                     path_backend,
+                    roi.clone(),
                 );
                 backend_state.run();
             })),

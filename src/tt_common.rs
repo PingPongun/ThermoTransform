@@ -2,7 +2,9 @@ use atomic_enum::atomic_enum;
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 use lazy_static::*;
 use std::iter;
+use std::mem::ManuallyDrop;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU32, Ordering};
 use strum::VariantNames;
 use strum_macros::EnumVariantNames;
 
@@ -31,6 +33,18 @@ pub struct RangedVal
     pub val : usize,
     pub min : usize,
     pub max : usize,
+}
+pub union AtomicPoint
+{
+    atomic : ManuallyDrop<AtomicU32>,
+    simple : u32,
+    split :  (u16, u16),
+}
+pub struct SemiAtomicRect
+{
+    pub min :       AtomicPoint,
+    pub max :       AtomicPoint,
+    pub full_size : AtomicPoint,
 }
 
 #[atomic_enum]
@@ -180,6 +194,60 @@ impl Default for RangedVal
             min : 0,
             max : 100,
         }
+    }
+}
+impl AtomicPoint
+{
+    pub fn set(&self, val : (u16, u16))
+    {
+        unsafe {
+            self.atomic
+                .store(AtomicPoint { split : val }.simple, Ordering::Relaxed);
+        }
+    }
+    pub fn get(&self) -> (u16, u16)
+    {
+        unsafe {
+            AtomicPoint {
+                simple : self.atomic.load(Ordering::Relaxed),
+            }
+            .split
+        }
+    }
+}
+impl SemiAtomicRect
+{
+    pub fn new(min : (u16, u16), max : (u16, u16), full : (u16, u16)) -> Self
+    {
+        Self {
+            min :       AtomicPoint { split : min },
+            max :       AtomicPoint { split : max },
+            full_size : AtomicPoint { split : full },
+        }
+    }
+    pub fn set_min(&self, min : (u16, u16))
+    {
+        let mut min = min;
+        let full = self.full_size.get();
+        min.0 = min.0.clamp(0, full.0);
+        min.1 = min.1.clamp(0, full.1);
+        let max = self.max.get();
+        let minq = (u16::min(min.0, max.0), u16::min(min.1, max.1));
+        let maxq = (u16::max(min.0, max.0), u16::max(min.1, max.1));
+        self.min.set(minq);
+        self.max.set(maxq);
+    }
+    pub fn set_max(&self, max : (u16, u16))
+    {
+        let mut max = max;
+        let full = self.full_size.get();
+        max.0 = max.0.clamp(0, full.0);
+        max.1 = max.1.clamp(0, full.1);
+        let min = self.min.get();
+        let minq = (u16::min(min.0, max.0), u16::min(min.1, max.1));
+        let maxq = (u16::max(min.0, max.0), u16::max(min.1, max.1));
+        self.min.set(minq);
+        self.max.set(maxq);
     }
 }
 

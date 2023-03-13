@@ -23,12 +23,14 @@ pub struct TTViewBackend
     pub state :      Arc<AtomicTTViewState>,
     pub thermogram : tribuf::Input<Thermogram>,
     pub params :     tribuf::Output<TTViewParams>,
+    pub roi :        Arc<SemiAtomicRect>,
 }
 struct TTFileBackend
 {
     frames :     Arc<AtomicUsize>,
     state :      Arc<AtomicFileState>,
     path :       tribuf::Output<Option<OsString>>,
+    roi :        Arc<SemiAtomicRect>,
     input_data : Option<TTInputData>,
     lazy_cwt :   Option<TTLazyCWT>,
 }
@@ -132,12 +134,14 @@ impl TTFileBackend
         frames : Arc<AtomicUsize>,
         state : Arc<AtomicFileState>,
         path : tribuf::Output<Option<OsString>>,
+        roi : Arc<SemiAtomicRect>,
     ) -> Self
     {
         Self {
             frames,
             state,
             path,
+            roi,
             input_data : None,
             lazy_cwt : None,
         }
@@ -152,13 +156,14 @@ impl TTStateBackend
         frames : Arc<AtomicUsize>,
         state : Arc<AtomicFileState>,
         path : tribuf::Output<Option<OsString>>,
+        roi : Arc<SemiAtomicRect>,
     ) -> Self
     {
         Self {
             views,
             changed,
             stop_flag,
-            file : TTFileBackend::new(frames, state, path),
+            file : TTFileBackend::new(frames, state, path, roi),
             wavelet_bank : WaveletBank::new_wb(),
         }
     }
@@ -213,6 +218,12 @@ impl TTStateBackend
                         self.file
                             .frames
                             .store(input.data.len_of(ndarray::Axis(0)), Ordering::Relaxed);
+                        let (x, y) = (input.data.shape()[1] as u16, input.data.shape()[2] as u16);
+                        let min = (x / 8, y / 8);
+                        self.file.roi.min.set(min);
+                        self.file.roi.max.set((min.0 * 7, min.1 * 7));
+                        self.file.roi.full_size.set((x, y));
+
                         let _ = self.file.state.compare_exchange(
                             FileState::Loading,
                             FileState::Loaded,
