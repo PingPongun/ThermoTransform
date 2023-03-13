@@ -101,9 +101,9 @@ impl TTInputData
                 Err(_) => continue,
             };
         }
-        let mul = 1.0 / (max_val - min_val);
-        let add = -min_val * mul;
-        v_f64 = v_f64.into_par_iter().map(|x| (x * mul + add)).collect();
+        // let mul = 1.0 / (max_val - min_val);
+        // let add = -min_val * mul;
+        // v_f64 = v_f64.into_par_iter().map(|x| (x * mul + add)).collect();
         Some(TTInputData {
             data : Array::from_shape_vec((depths, rows, columns), v_f64).unwrap(),
             min_val,

@@ -138,7 +138,7 @@ impl Thermogram
                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
                 let ava_space = ui.available_height();
                 let label_height = ui
-                    .label(self.scale[self.scale.len() - 1].to_string())
+                    .label(format!("{:.2}", self.scale[self.scale.len() - 1]))
                     .rect
                     .height();
                 let n = ava_space / label_height;
@@ -163,7 +163,7 @@ impl Thermogram
                 for i in (0..(label_count - 1)).rev()
                 {
                     ui.add_space(spacing_height);
-                    ui.label(self.scale[i * stride].to_string());
+                    ui.label(format!("{:.2}", self.scale[i * stride]));
                 }
             });
         })
