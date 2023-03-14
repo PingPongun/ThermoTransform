@@ -6,6 +6,7 @@ use egui::{
     Image,
     Pos2,
     Rect,
+    RichText,
     Sense,
     Spinner,
     Stroke,
@@ -59,7 +60,31 @@ pub struct TTStateGUI
 //=======================================
 //=====Traits & Trait Implementations====
 //=======================================
-
+trait BoolSwitchable<T>
+{
+    fn show_switchable(&mut self, ui : &mut egui::Ui, text : &str) -> bool;
+}
+impl BoolSwitchable<bool> for bool
+{
+    fn show_switchable(&mut self, ui : &mut egui::Ui, text : &str) -> bool
+    {
+        let mut retval = false;
+        let text = if *self == true
+        {
+            RichText::new(text)
+        }
+        else
+        {
+            RichText::new(text).strikethrough()
+        };
+        if ui.button(text).clicked()
+        {
+            *self = !*self;
+            retval = true;
+        }
+        retval
+    }
+}
 trait EnumCombobox<T>
 {
     fn show_combobox(&mut self, ui : &mut egui::Ui) -> bool;
@@ -258,11 +283,13 @@ impl TTViewParams
                     retval.0 |= retval.1;
                     ui.label("| frame:");
                     retval.0 |= params.time.show(ui);
+                    retval.0 |= params.denoise.show_switchable(ui, "denoise");
                 }
-                TimeView(time) =>
+                TimeView(params) =>
                 {
                     ui.label("| frame:");
-                    retval.0 |= time.show(ui);
+                    retval.0 |= params.time.show(ui);
+                    retval.0 |= params.denoise.show_switchable(ui, "denoise");
                 }
             }
         });
@@ -473,10 +500,10 @@ impl TTStateGUI
                                     tparams.time.max = tparams.scale.max - tparams.scale.val;
                                     params = TransformView(tparams)
                                 }
-                                TimeView(mut time) =>
+                                TimeView(mut tparams) =>
                                 {
-                                    time.max = frames - 1;
-                                    params = TimeView(time);
+                                    tparams.time.max = frames - 1;
+                                    params = TimeView(tparams);
                                 }
                             }
                             //update backend buffer

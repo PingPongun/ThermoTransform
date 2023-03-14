@@ -78,6 +78,13 @@ pub struct TransformViewParams
     pub time :    RangedVal,
     pub wavelet : WaveletType,
     pub mode :    WtResultMode,
+    pub denoise : bool,
+}
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct TimeViewParams
+{
+    pub time :    RangedVal,
+    pub denoise : bool,
 }
 
 #[derive(
@@ -93,36 +100,55 @@ pub struct TransformViewParams
 pub enum TTViewParams
 {
     TransformView(TransformViewParams),
-    TimeView(RangedVal),
+    TimeView(TimeViewParams),
 }
 
 impl TTViewParams
 {
-    pub fn time_default() -> Self { TimeView(Default::default()) }
-    pub fn transform_default() -> Self { TransformView(Default::default()) }
-    pub fn time_frames(frames : usize) -> Self
+    pub fn time_default() -> Self
     {
-        TimeView(RangedVal {
-            val : 0,
-            min : 0,
-            max : frames - 1,
+        TimeView(TimeViewParams {
+            time :    Default::default(),
+            denoise : true,
         })
     }
-    pub fn transform_frames(frames : usize) -> Self
+    pub fn transform_default() -> Self
     {
         TransformView(TransformViewParams {
-            time :    RangedVal {
+            scale :   Default::default(),
+            time :    Default::default(),
+            wavelet : Default::default(),
+            mode :    Default::default(),
+            denoise : true,
+        })
+    }
+    pub fn time_frames(frames : usize, denoise : bool) -> Self
+    {
+        TimeView(TimeViewParams {
+            time : RangedVal {
                 val : 0,
                 min : 0,
                 max : frames - 1,
             },
-            scale :   RangedVal {
+            denoise,
+        })
+    }
+    pub fn transform_frames(frames : usize, denoise : bool) -> Self
+    {
+        TransformView(TransformViewParams {
+            time : RangedVal {
+                val : 0,
+                min : 0,
+                max : frames - 1,
+            },
+            scale : RangedVal {
                 val : 1,
                 min : 1,
                 max : frames,
             },
             wavelet : Default::default(),
-            mode :    Default::default(),
+            mode : Default::default(),
+            denoise,
         })
     }
     pub fn transform_wavelet(wavelet : WaveletType, mode : WtResultMode) -> Self
@@ -132,6 +158,7 @@ impl TTViewParams
             scale : Default::default(),
             wavelet,
             mode,
+            denoise : true,
         })
     }
 }
@@ -162,18 +189,27 @@ impl EnumUpdate<TTViewParams> for TTViewParams
         let timeview : &'static str = Self::time_default().into();
         let transformview : &'static str = Self::transform_default().into();
         let frames;
+        let denoise;
         match self
         {
-            TimeView(time) => frames = time.max + 1,
-            TransformView(params) => frames = params.scale.max,
+            TimeView(params) =>
+            {
+                frames = params.time.max + 1;
+                denoise = params.denoise;
+            }
+            TransformView(params) =>
+            {
+                frames = params.scale.max;
+                denoise = params.denoise;
+            }
         };
         if timeview == new_val
         {
-            *self = Self::time_frames(frames)
+            *self = Self::time_frames(frames, denoise)
         }
         else if transformview == new_val
         {
-            *self = Self::transform_frames(frames)
+            *self = Self::transform_frames(frames, denoise)
         }
         else
         {

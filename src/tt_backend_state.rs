@@ -1,5 +1,6 @@
 use egui::{ColorImage, TextureOptions};
 use ndarray::{s, ArrayView2, Axis};
+use ndarray_ndimage::{convolve, BorderMode};
 use parking_lot::{Condvar, Mutex};
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use rayon::slice::ParallelSliceMut;
@@ -49,8 +50,26 @@ pub struct TTStateBackend
 //=======================================
 impl TTViewBackend
 {
-    fn update_image<'a>(&mut self, array : ArrayView2<'a, f64>, grad : TTGradients) -> ()
+    fn update_image<'a>(
+        &mut self,
+        array : ArrayView2<'a, f64>,
+        grad : TTGradients,
+        denoise : bool,
+    ) -> ()
     {
+        let array_base;
+        let array = if denoise
+        {
+            //low pass filtring
+            let filter =
+                ndarray::arr2(&[[0.05_f64, 0.1, 0.05], [0.1, 0.4, 0.1], [0.05, 0.1, 0.05]]);
+            array_base = convolve(&array.reborrow(), &filter.view(), BorderMode::Reflect, 0);
+            array_base.view()
+        }
+        else
+        {
+            array.reborrow()
+        };
         let array_roi = array.slice(s![
             self.roi.min.get().0 as usize..=self.roi.max.get().0 as usize,
             self.roi.min.get().1 as usize..=self.roi.max.get().1 as usize
@@ -262,7 +281,7 @@ impl TTStateBackend
                                 {
                                     for view in &mut self.views
                                     {
-                                        if let TimeView(time) = view.params.read()
+                                        if let TimeView(params) = view.params.read()
                                         {
                                             if let Ok(_) = view.state.compare_exchange(
                                                 TTViewState::Changed,
@@ -273,11 +292,14 @@ impl TTStateBackend
                                             {
                                                 if let Some(input) = &self.file.input_data
                                                 {
-                                                    let input_view =
-                                                        input.data.index_axis(Axis(0), time.val);
+                                                    let input_view = input
+                                                        .data
+                                                        .index_axis(Axis(0), params.time.val);
+                                                    let denoise = params.denoise;
                                                     view.update_image(
                                                         input_view,
                                                         TTGradients::Linear,
+                                                        denoise,
                                                     );
                                                 }
                                             }
@@ -320,12 +342,14 @@ impl TTStateBackend
                         {
                             match view.params.read()
                             {
-                                TimeView(time) =>
+                                TimeView(params) =>
                                 {
                                     if let Some(input) = &self.file.input_data
                                     {
-                                        let input_view = input.data.index_axis(Axis(0), time.val);
-                                        view.update_image(input_view, TTGradients::Linear);
+                                        let input_view =
+                                            input.data.index_axis(Axis(0), params.time.val);
+                                        let denoise = params.denoise;
+                                        view.update_image(input_view, TTGradients::Linear, denoise);
                                     }
                                 }
                                 TransformView(params) =>
@@ -334,13 +358,22 @@ impl TTStateBackend
                                     {
                                         //calculate & display requested waveletet transform
                                         let cwt_view = cwt.cwt(&mut self.wavelet_bank, params);
+                                        let denoise = params.denoise;
                                         if params.mode == WtResultMode::Phase
                                         {
-                                            view.update_image(cwt_view.view(), TTGradients::Phase);
+                                            view.update_image(
+                                                cwt_view.view(),
+                                                TTGradients::Phase,
+                                                denoise,
+                                            );
                                         }
                                         else
                                         {
-                                            view.update_image(cwt_view.view(), TTGradients::Linear);
+                                            view.update_image(
+                                                cwt_view.view(),
+                                                TTGradients::Linear,
+                                                denoise,
+                                            );
                                         };
                                     }
                                 }
