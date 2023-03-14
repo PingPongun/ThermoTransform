@@ -1,5 +1,5 @@
 use egui::{ColorImage, TextureOptions};
-use ndarray::{ArrayView2, Axis};
+use ndarray::{s, ArrayView2, Axis};
 use parking_lot::{Condvar, Mutex};
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use rayon::slice::ParallelSliceMut;
@@ -51,11 +51,23 @@ impl TTViewBackend
 {
     fn update_image<'a>(&mut self, array : ArrayView2<'a, f64>, grad : TTGradients) -> ()
     {
+        let array_roi = array.slice(s![
+            self.roi.min.get().0 as usize..=self.roi.max.get().0 as usize,
+            self.roi.min.get().1 as usize..=self.roi.max.get().1 as usize
+        ]);
+        let roi_len = array_roi.len();
+        let non_roi_len = array.len() - roi_len;
+        //replicate roi pixels `roi_mul`-1 times to ensure that roi pixels occurs(in histogram) as if roi spans above at least 70% of image
+        let roi_mul = (7.0 / 3.0 * non_roi_len as f64 / roi_len as f64).ceil() as usize;
         let array_iter = array.into_par_iter().cloned();
-        let rgb;
-        let gram = self.thermogram.input_buffer();
 
-        let mut array_vec = array.as_slice_memory_order().unwrap().to_vec();
+        let mut array_vec = Vec::with_capacity(non_roi_len + roi_len * roi_mul + 2);
+        array_vec.extend_from_slice(array.as_slice_memory_order().unwrap());
+        let array_roi_iter = array_roi.iter();
+        for _ in 1..roi_mul
+        {
+            array_vec.extend(array_roi_iter.clone());
+        }
         if grad == TTGradients::Phase
         {
             //for phase gradient force -PI & PI as extreme vals
@@ -66,6 +78,7 @@ impl TTViewBackend
             .as_parallel_slice_mut()
             .sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let quantile_count = (array_vec.len() - 1) as f64 / 32.0;
+        let gram = self.thermogram.input_buffer();
         gram.scale.iter_mut().enumerate().for_each(|(idx, val)| {
             *val = array_vec[(quantile_count * idx as f64).round() as usize]
         });
@@ -86,7 +99,7 @@ impl TTViewBackend
                 (mul, add)
             })
             .collect();
-        rgb = array_iter
+        let rgb = array_iter
             .map(|x| {
                 let color;
                 match gram.scale.binary_search_by(|a| a.partial_cmp(&x).unwrap())

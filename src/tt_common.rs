@@ -4,7 +4,7 @@ use lazy_static::*;
 use std::iter;
 use std::mem::ManuallyDrop;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use strum::VariantNames;
 use strum_macros::EnumVariantNames;
 
@@ -45,6 +45,7 @@ pub struct SemiAtomicRect
     pub min :       AtomicPoint,
     pub max :       AtomicPoint,
     pub full_size : AtomicPoint,
+    changed :       AtomicBool,
 }
 
 #[atomic_enum]
@@ -223,14 +224,15 @@ impl SemiAtomicRect
             min :       AtomicPoint { split : min },
             max :       AtomicPoint { split : max },
             full_size : AtomicPoint { split : full },
+            changed :   AtomicBool::new(false),
         }
     }
     pub fn set_min(&self, min : (u16, u16))
     {
         let mut min = min;
         let full = self.full_size.get();
-        min.0 = min.0.clamp(0, full.0);
-        min.1 = min.1.clamp(0, full.1);
+        min.0 = min.0.clamp(0, full.0 - 1);
+        min.1 = min.1.clamp(0, full.1 - 1);
         let max = self.max.get();
         let minq = (u16::min(min.0, max.0), u16::min(min.1, max.1));
         let maxq = (u16::max(min.0, max.0), u16::max(min.1, max.1));
@@ -241,14 +243,15 @@ impl SemiAtomicRect
     {
         let mut max = max;
         let full = self.full_size.get();
-        max.0 = max.0.clamp(0, full.0);
-        max.1 = max.1.clamp(0, full.1);
+        max.0 = max.0.clamp(0, full.0 - 1);
+        max.1 = max.1.clamp(0, full.1 - 1);
         let min = self.min.get();
         let minq = (u16::min(min.0, max.0), u16::min(min.1, max.1));
         let maxq = (u16::max(min.0, max.0), u16::max(min.1, max.1));
         self.min.set(minq);
         self.max.set(maxq);
     }
+    pub fn changed(&self, set : bool) -> bool { self.changed.swap(set, Ordering::Relaxed) }
 }
 
 impl Thermogram

@@ -115,10 +115,15 @@ impl RangedVal
 }
 impl Thermogram
 {
-    fn show(&self, ui : &mut egui::Ui, roi : &Arc<SemiAtomicRect>) -> egui::InnerResponse<()>
+    fn show(
+        &self,
+        ui : &mut egui::Ui,
+        roi : &Arc<SemiAtomicRect>,
+    ) -> (bool, egui::InnerResponse<()>)
     {
         let available_size = ui.available_size();
         let image_aspect = self.image.aspect_ratio();
+        let mut retval = false;
         let size = if (available_size.x / available_size.y) > image_aspect
         {
             //available space is proportionaly wider than original image
@@ -135,7 +140,7 @@ impl Thermogram
                 y : available_size.x / image_aspect,
             }
         };
-        ui.horizontal_centered(|ui| {
+        let responce = ui.horizontal_centered(|ui| {
             let img_rsp = ui.add(Image::new(self.image.id(), size).sense(Sense::click()));
             let size = img_rsp.rect.size();
             let roi_min = roi.min.get();
@@ -149,6 +154,8 @@ impl Thermogram
                     (full_size.0 as f32 * (click_pos.x - img_rsp.rect.min.x) / size.x) as u16,
                     (full_size.1 as f32 * (click_pos.y - img_rsp.rect.min.y) / size.y) as u16,
                 ));
+                roi.changed(true);
+                retval = true;
             }
             else if img_rsp.secondary_clicked()
             {
@@ -158,6 +165,8 @@ impl Thermogram
                     (full_size.0 as f32 * (click_pos.x - img_rsp.rect.min.x) / size.x) as u16,
                     (full_size.1 as f32 * (click_pos.y - img_rsp.rect.min.y) / size.y) as u16,
                 ));
+                roi.changed(true);
+                retval = true;
             }
             else
             { //roi has not changed/ image not clicked
@@ -220,7 +229,8 @@ impl Thermogram
                     ui.label(format!("{:.2}", self.scale[i * stride]));
                 }
             });
-        })
+        });
+        (retval, responce)
     }
 }
 impl TTViewParams
@@ -334,12 +344,14 @@ impl TTViewGUI
                     {
                         TTViewState::Valid =>
                         {
-                            gram.show(ui, &self.roi);
+                            let (changed, _rsp) = gram.show(ui, &self.roi);
+                            retval |= changed;
                         }
                         TTViewState::Processing | TTViewState::Changed =>
                         {
-                            let rect = gram.show(ui, &self.roi).response.rect;
-                            ui.put(rect, Spinner::default());
+                            let (changed, rsp) = gram.show(ui, &self.roi);
+                            retval |= changed;
+                            ui.put(rsp.response.rect, Spinner::default());
                         }
                         TTViewState::Invalid => (),
                     }
@@ -539,6 +551,13 @@ impl TTStateGUI
                 });
             if changed
             {
+                if self.file.roi.changed(false)
+                {
+                    //if roi has changed refresh all views
+                    self.views.iter().for_each(|view| {
+                        view.state.store(TTViewState::Changed, Ordering::Relaxed);
+                    })
+                }
                 self.notify_backend();
             }
         });
