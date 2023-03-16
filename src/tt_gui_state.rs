@@ -23,7 +23,6 @@ use strum::VariantNames;
 use triple_buffer as tribuf;
 use triple_buffer::triple_buffer;
 
-use crate::cwt::*;
 use crate::tt_backend_state::*;
 use crate::tt_common::*;
 use crate::wavelet::WaveletType;
@@ -274,7 +273,7 @@ impl TTViewParams
                 {
                     ui.style_mut().wrap = Some(false);
                     ui.label("| mode:");
-                    retval.0 |= params.mode.show_combobox(ui);
+                    retval.0 |= params.display_mode.show_combobox(ui);
                     ui.style_mut().wrap = Some(false);
                     ui.label("| wavelet:");
                     retval.0 |= params.wavelet.show_combobox(ui);
@@ -289,6 +288,14 @@ impl TTViewParams
                 {
                     ui.label("| frame:");
                     retval.0 |= params.time.show(ui);
+                    retval.0 |= params.denoise.show_switchable(ui, "denoise");
+                }
+                FourierView(params) =>
+                {
+                    ui.label("| mode:");
+                    retval.0 |= params.display_mode.show_combobox(ui);
+                    ui.label("| relative frequency:");
+                    retval.0 |= params.freq.show(ui);
                     retval.0 |= params.denoise.show_switchable(ui, "denoise");
                 }
             }
@@ -396,9 +403,9 @@ impl TTStateGUI
         TTGradients::init_grad(ctx);
         let default_view_params = [
             TTViewParams::time_default(),
-            TTViewParams::time_default(),
-            TTViewParams::wavelet_wavelet(WaveletType::Morlet, WtResultMode::Phase),
-            TTViewParams::wavelet_wavelet(WaveletType::Morlet, WtResultMode::Magnitude),
+            TTViewParams::wavelet_wavelet(WaveletType::Morlet, ComplexResultMode::Phase),
+            TTViewParams::wavelet_wavelet(WaveletType::Morlet, ComplexResultMode::Magnitude),
+            TTViewParams::fourier_default(),
         ];
         let roi = Arc::new(SemiAtomicRect::new((0, 0), (1, 1), (1, 1)));
         // let (mut views_gui, mut views_backend) : ([TTViewGUI; 4], [TTViewBackend; 4]) =
@@ -505,6 +512,11 @@ impl TTStateGUI
                                     tparams.time.max = frames - 1;
                                     params = TimeView(tparams);
                                 }
+                                FourierView(mut tparams) =>
+                                {
+                                    tparams.freq.max = frames / 2;
+                                    params = FourierView(tparams);
+                                }
                             }
                             //update backend buffer
                             *view.params.input_buffer() = params;
@@ -522,6 +534,12 @@ impl TTStateGUI
                     {
                         ui.label(path.to_string_lossy());
                         ui.label(" Processing Wavelet transforms...");
+                        ui.spinner();
+                    }
+                    (Some(path), FileState::ProcessingFourier) =>
+                    {
+                        ui.label(path.to_string_lossy());
+                        ui.label(" Processing Fourier transforms...");
                         ui.spinner();
                     }
                     (Some(path), _) =>

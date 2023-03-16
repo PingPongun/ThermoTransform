@@ -13,6 +13,7 @@ use triple_buffer::triple_buffer;
 
 use crate::cwt::*;
 use crate::tt_common::*;
+use crate::tt_fourier::TTFourier;
 use crate::tt_input_data::*;
 use crate::wavelet::{WaveletBank, WaveletBankTrait};
 
@@ -34,6 +35,7 @@ struct TTFileBackend
     roi :        Arc<SemiAtomicRect>,
     input_data : Option<TTInputData>,
     lazy_cwt :   Option<TTLazyCWT>,
+    fourier :    Option<TTFourier>,
 }
 
 pub struct TTStateBackend
@@ -90,13 +92,40 @@ impl TTViewBackend
                     //calculate & display requested waveletet transform
                     let cwt_view = cwt.cwt(wavelet_bank, params);
                     let denoise = params.denoise;
-                    if params.mode == WtResultMode::Phase
+                    if params.display_mode == ComplexResultMode::Phase
                     {
                         self.update_image(cwt_view.view(), TTGradients::Phase, denoise);
                     }
                     else
                     {
                         self.update_image(cwt_view.view(), TTGradients::Linear, denoise);
+                    };
+                }
+            }
+        }
+    }
+    fn fourier_view_check_update(&mut self, fourier : &Option<TTFourier>) -> ()
+    {
+        if let FourierView(params) = self.params.read()
+        {
+            if let Ok(_) = self.state.compare_exchange(
+                TTViewState::Changed,
+                TTViewState::Processing,
+                Ordering::SeqCst,
+                Ordering::Acquire,
+            )
+            {
+                if let Some(fourier) = fourier
+                {
+                    let snapshot = fourier.snapshot(params);
+                    let denoise = params.denoise;
+                    if params.display_mode == ComplexResultMode::Phase
+                    {
+                        self.update_image(snapshot.view(), TTGradients::Phase, denoise);
+                    }
+                    else
+                    {
+                        self.update_image(snapshot.view(), TTGradients::Linear, denoise);
                     };
                 }
             }
@@ -228,6 +257,7 @@ impl TTFileBackend
             roi,
             input_data : None,
             lazy_cwt : None,
+            fourier : None,
         }
     }
 }
@@ -345,8 +375,8 @@ impl TTStateBackend
                                 {
                                     //file processed correctly
                                     let _ = self.file.state.compare_exchange(
-                                        FileState::Ready,
                                         FileState::ProcessingWavelet,
+                                        FileState::ProcessingFourier,
                                         Ordering::SeqCst,
                                         Ordering::Acquire,
                                     );
@@ -359,14 +389,57 @@ impl TTStateBackend
                         unreachable!()
                     }
                 }
+                FileState::ProcessingFourier =>
+                {
+                    if let Some(input) = &self.file.input_data
+                    {
+                        self.file.fourier = None;
+                        rayon::join(
+                            || {
+                                //continously update time views if necessary
+                                while FileState::ProcessingFourier
+                                    == self.file.state.load(Ordering::Relaxed)
+                                    && self.stop_flag.load(Ordering::Relaxed) == false
+                                {
+                                    for view in &mut self.views
+                                    {
+                                        view.time_view_check_update(&self.file.input_data);
+                                        view.wavelet_view_check_update(
+                                            &self.file.lazy_cwt,
+                                            &mut self.wavelet_bank,
+                                        );
+                                    }
+                                }
+                            },
+                            || {
+                                self.file.fourier =
+                                    TTFourier::new(&input.data, self.file.state.clone());
 
+                                if let Some(_) = &self.file.fourier
+                                {
+                                    //file processed correctly
+                                    let _ = self.file.state.compare_exchange(
+                                        FileState::ProcessingFourier,
+                                        FileState::Ready,
+                                        Ordering::SeqCst,
+                                        Ordering::Acquire,
+                                    );
+                                }
+                            },
+                        );
+                    }
+                    else
+                    {
+                        unreachable!()
+                    }
+                }
                 FileState::Ready =>
                 {
                     for view in &mut self.views
                     {
                         view.time_view_check_update(&self.file.input_data);
                         view.wavelet_view_check_update(&self.file.lazy_cwt, &mut self.wavelet_bank);
-                        view.fourier_view_check_update();
+                        view.fourier_view_check_update(&self.file.fourier);
                     }
                     self.check_changed_and_sleep();
                 }

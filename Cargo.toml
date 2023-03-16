@@ -25,6 +25,7 @@ atomic_enum = "0.2.0"
 mathru="0.14"
 lazy_static="1.4"
 ndarray-ndimage = "0.3.0"
+ndrustfft = "0.4.0"
 
 [patch.crates-io]
 ndarray={git="https://github.com/PingPongun/ndarray.git", branch = "master"}

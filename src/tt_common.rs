@@ -6,9 +6,8 @@ use std::mem::ManuallyDrop;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use strum::VariantNames;
-use strum_macros::EnumVariantNames;
+use strum_macros::{EnumString, EnumVariantNames};
 
-use crate::cwt::*;
 use crate::wavelet::WaveletType;
 
 //=======================================
@@ -24,9 +23,21 @@ pub enum FileState
     Loading,
     Loaded,
     ProcessingWavelet,
+    ProcessingFourier,
     Ready,
 }
-
+#[derive(
+    Clone, Copy, PartialEq, Debug, Default, strum_macros::AsRefStr, EnumString, EnumVariantNames,
+)]
+#[strum(serialize_all = "title_case")]
+pub enum ComplexResultMode
+{
+    #[default]
+    Phase,
+    Magnitude,
+    Real,
+    Imaginary,
+}
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct RangedVal
 {
@@ -74,17 +85,24 @@ pub enum TTGradients
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct WaveletViewParams
 {
-    pub scale :   RangedVal,
-    pub time :    RangedVal,
-    pub wavelet : WaveletType,
-    pub mode :    WtResultMode,
-    pub denoise : bool,
+    pub scale :        RangedVal,
+    pub time :         RangedVal,
+    pub wavelet :      WaveletType,
+    pub display_mode : ComplexResultMode,
+    pub denoise :      bool,
 }
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct TimeViewParams
 {
     pub time :    RangedVal,
     pub denoise : bool,
+}
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct FourierViewParams
+{
+    pub freq :         RangedVal,
+    pub display_mode : ComplexResultMode,
+    pub denoise :      bool,
 }
 
 #[derive(
@@ -101,6 +119,7 @@ pub enum TTViewParams
 {
     WaveletView(WaveletViewParams),
     TimeView(TimeViewParams),
+    FourierView(FourierViewParams),
 }
 pub use TTViewParams::*;
 
@@ -128,18 +147,28 @@ impl EnumUpdate<TTViewParams> for TTViewParams
     {
         let timeview : &'static str = Self::time_default().into();
         let waveletview : &'static str = Self::wavelet_default().into();
+        let fourierview : &'static str = Self::fourier_default().into();
         let frames;
         let denoise;
+        let display_mode;
         match self
         {
+            FourierView(params) =>
+            {
+                frames = params.freq.max * 2; //TODO FIX
+                display_mode = params.display_mode;
+                denoise = params.denoise;
+            }
             TimeView(params) =>
             {
                 frames = params.time.max + 1;
+                display_mode = Default::default();
                 denoise = params.denoise;
             }
             WaveletView(params) =>
             {
                 frames = params.scale.max;
+                display_mode = params.display_mode;
                 denoise = params.denoise;
             }
         };
@@ -149,7 +178,11 @@ impl EnumUpdate<TTViewParams> for TTViewParams
         }
         else if waveletview == new_val
         {
-            *self = Self::wavelet_frames(frames, denoise)
+            *self = Self::wavelet_frames(frames, denoise, display_mode)
+        }
+        else if fourierview == new_val
+        {
+            *self = Self::fourier_frames(frames, denoise, display_mode)
         }
         else
         {
@@ -356,14 +389,22 @@ impl TTViewParams
             denoise : true,
         })
     }
+    pub fn fourier_default() -> Self
+    {
+        FourierView(FourierViewParams {
+            freq :         Default::default(),
+            display_mode : Default::default(),
+            denoise :      true,
+        })
+    }
     pub fn wavelet_default() -> Self
     {
         WaveletView(WaveletViewParams {
-            scale :   Default::default(),
-            time :    Default::default(),
-            wavelet : Default::default(),
-            mode :    Default::default(),
-            denoise : true,
+            scale :        Default::default(),
+            time :         Default::default(),
+            wavelet :      Default::default(),
+            display_mode : Default::default(),
+            denoise :      true,
         })
     }
     pub fn time_frames(frames : usize, denoise : bool) -> Self
@@ -377,7 +418,21 @@ impl TTViewParams
             denoise,
         })
     }
-    pub fn wavelet_frames(frames : usize, denoise : bool) -> Self
+    pub fn fourier_frames(frames : usize, denoise : bool, display_mode : ComplexResultMode)
+        -> Self
+    {
+        FourierView(FourierViewParams {
+            freq : RangedVal {
+                val : 0,
+                min : 0,
+                max : frames / 2,
+            },
+            display_mode,
+            denoise,
+        })
+    }
+    pub fn wavelet_frames(frames : usize, denoise : bool, display_mode : ComplexResultMode)
+        -> Self
     {
         WaveletView(WaveletViewParams {
             time : RangedVal {
@@ -391,17 +446,17 @@ impl TTViewParams
                 max : frames,
             },
             wavelet : Default::default(),
-            mode : Default::default(),
+            display_mode,
             denoise,
         })
     }
-    pub fn wavelet_wavelet(wavelet : WaveletType, mode : WtResultMode) -> Self
+    pub fn wavelet_wavelet(wavelet : WaveletType, mode : ComplexResultMode) -> Self
     {
         WaveletView(WaveletViewParams {
             time : Default::default(),
             scale : Default::default(),
             wavelet,
-            mode,
+            display_mode : mode,
             denoise : true,
         })
     }

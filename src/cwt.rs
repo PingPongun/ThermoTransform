@@ -8,23 +8,10 @@ use rayon::prelude::IntoParallelIterator;
 use rayon::prelude::ParallelIterator;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use strum_macros::{EnumString, EnumVariantNames};
 
 use crate::tt_common::*;
 use crate::wavelet::*;
 
-#[derive(
-    Clone, Copy, PartialEq, Debug, Default, strum_macros::AsRefStr, EnumString, EnumVariantNames,
-)]
-#[strum(serialize_all = "title_case")]
-pub enum WtResultMode
-{
-    #[default]
-    Phase,
-    Magnitude,
-    Real,
-    Imaginary,
-}
 type Integrals = [f64; 4];
 
 fn gen_integrals(non_integrated : ArrayView1<'_, f64>, mut integrals : ArrayViewMut1<'_, Integrals>)
@@ -222,12 +209,12 @@ impl TTLazyCWT
                     })
                     .collect();
                 //convert to requested format
-                match params.mode
+                match params.display_mode
                 {
-                    WtResultMode::Phase => real_img[1].atan2(real_img[0]), //radians
-                    WtResultMode::Magnitude => real_img[0].hypot(real_img[1]),
-                    WtResultMode::Real => real_img[0],
-                    WtResultMode::Imaginary => real_img[1],
+                    ComplexResultMode::Phase => real_img[1].atan2(real_img[0]), //radians
+                    ComplexResultMode::Magnitude => real_img[0].hypot(real_img[1]),
+                    ComplexResultMode::Real => real_img[0],
+                    ComplexResultMode::Imaginary => real_img[1],
                 }
             })
             .collect();
