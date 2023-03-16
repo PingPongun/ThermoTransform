@@ -50,6 +50,58 @@ pub struct TTStateBackend
 //=======================================
 impl TTViewBackend
 {
+    fn time_view_check_update(&mut self, input_data : &Option<TTInputData>) -> ()
+    {
+        if let TimeView(params) = self.params.read()
+        {
+            if let Ok(_) = self.state.compare_exchange(
+                TTViewState::Changed,
+                TTViewState::Processing,
+                Ordering::SeqCst,
+                Ordering::Acquire,
+            )
+            {
+                if let Some(input) = input_data
+                {
+                    let input_view = input.data.index_axis(Axis(0), params.time.val);
+                    let denoise = params.denoise;
+                    self.update_image(input_view, TTGradients::Linear, denoise);
+                }
+            }
+        }
+    }
+    fn wavelet_view_check_update(
+        &mut self,
+        lazy_cwt : &Option<TTLazyCWT>,
+        wavelet_bank : &mut WaveletBank,
+    ) -> ()
+    {
+        if let WaveletView(params) = self.params.read()
+        {
+            if let Ok(_) = self.state.compare_exchange(
+                TTViewState::Changed,
+                TTViewState::Processing,
+                Ordering::SeqCst,
+                Ordering::Acquire,
+            )
+            {
+                if let Some(cwt) = lazy_cwt
+                {
+                    //calculate & display requested waveletet transform
+                    let cwt_view = cwt.cwt(wavelet_bank, params);
+                    let denoise = params.denoise;
+                    if params.mode == WtResultMode::Phase
+                    {
+                        self.update_image(cwt_view.view(), TTGradients::Phase, denoise);
+                    }
+                    else
+                    {
+                        self.update_image(cwt_view.view(), TTGradients::Linear, denoise);
+                    };
+                }
+            }
+        }
+    }
     fn update_image<'a>(
         &mut self,
         array : ArrayView2<'a, f64>,
@@ -267,7 +319,7 @@ impl TTStateBackend
                 FileState::Loaded =>
                     //this state is only for gui to acknowlege processing completed
                     {}
-                FileState::Processing =>
+                FileState::ProcessingWavelet =>
                 {
                     if let Some(input) = &self.file.input_data
                     {
@@ -275,35 +327,13 @@ impl TTStateBackend
                         rayon::join(
                             || {
                                 //continously update time views if necessary
-                                while FileState::Processing
+                                while FileState::ProcessingWavelet
                                     == self.file.state.load(Ordering::Relaxed)
                                     && self.stop_flag.load(Ordering::Relaxed) == false
                                 {
                                     for view in &mut self.views
                                     {
-                                        if let TimeView(params) = view.params.read()
-                                        {
-                                            if let Ok(_) = view.state.compare_exchange(
-                                                TTViewState::Changed,
-                                                TTViewState::Processing,
-                                                Ordering::SeqCst,
-                                                Ordering::Acquire,
-                                            )
-                                            {
-                                                if let Some(input) = &self.file.input_data
-                                                {
-                                                    let input_view = input
-                                                        .data
-                                                        .index_axis(Axis(0), params.time.val);
-                                                    let denoise = params.denoise;
-                                                    view.update_image(
-                                                        input_view,
-                                                        TTGradients::Linear,
-                                                        denoise,
-                                                    );
-                                                }
-                                            }
-                                        }
+                                        view.time_view_check_update(&self.file.input_data);
                                     }
                                 }
                             },
@@ -315,8 +345,8 @@ impl TTStateBackend
                                 {
                                     //file processed correctly
                                     let _ = self.file.state.compare_exchange(
-                                        FileState::Processing,
                                         FileState::Ready,
+                                        FileState::ProcessingWavelet,
                                         Ordering::SeqCst,
                                         Ordering::Acquire,
                                     );
@@ -329,56 +359,14 @@ impl TTStateBackend
                         unreachable!()
                     }
                 }
+
                 FileState::Ready =>
                 {
                     for view in &mut self.views
                     {
-                        if let Ok(_) = view.state.compare_exchange(
-                            TTViewState::Changed,
-                            TTViewState::Processing,
-                            Ordering::SeqCst,
-                            Ordering::Acquire,
-                        )
-                        {
-                            match view.params.read()
-                            {
-                                TimeView(params) =>
-                                {
-                                    if let Some(input) = &self.file.input_data
-                                    {
-                                        let input_view =
-                                            input.data.index_axis(Axis(0), params.time.val);
-                                        let denoise = params.denoise;
-                                        view.update_image(input_view, TTGradients::Linear, denoise);
-                                    }
-                                }
-                                TransformView(params) =>
-                                {
-                                    if let Some(cwt) = &self.file.lazy_cwt
-                                    {
-                                        //calculate & display requested waveletet transform
-                                        let cwt_view = cwt.cwt(&mut self.wavelet_bank, params);
-                                        let denoise = params.denoise;
-                                        if params.mode == WtResultMode::Phase
-                                        {
-                                            view.update_image(
-                                                cwt_view.view(),
-                                                TTGradients::Phase,
-                                                denoise,
-                                            );
-                                        }
-                                        else
-                                        {
-                                            view.update_image(
-                                                cwt_view.view(),
-                                                TTGradients::Linear,
-                                                denoise,
-                                            );
-                                        };
-                                    }
-                                }
-                            }
-                        }
+                        view.time_view_check_update(&self.file.input_data);
+                        view.wavelet_view_check_update(&self.file.lazy_cwt, &mut self.wavelet_bank);
+                        view.fourier_view_check_update();
                     }
                     self.check_changed_and_sleep();
                 }

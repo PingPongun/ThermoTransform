@@ -270,7 +270,7 @@ impl TTViewParams
             retval.0 |= self.show_combobox(ui);
             match self
             {
-                TransformView(params) =>
+                WaveletView(params) =>
                 {
                     ui.style_mut().wrap = Some(false);
                     ui.label("| mode:");
@@ -347,14 +347,14 @@ impl TTViewGUI
                 retval = true;
                 if scale_changed
                 {
-                    if let TransformView(mut params) = *self.params.input_buffer()
+                    if let WaveletView(mut params) = *self.params.input_buffer()
                     {
                         let out_count = params.scale.val - params.scale.min;
                         let out_count_half = out_count >> 1;
                         let out_count_half_larger = out_count - out_count_half;
                         params.time.max = params.scale.max - 1 - out_count_half_larger;
                         params.time.min = params.scale.min - 1 + out_count_half;
-                        (*self.params.input_buffer()) = TransformView(params);
+                        (*self.params.input_buffer()) = WaveletView(params);
                     }
                 }
 
@@ -396,9 +396,9 @@ impl TTStateGUI
         TTGradients::init_grad(ctx);
         let default_view_params = [
             TTViewParams::time_default(),
-            TTViewParams::transform_wavelet(WaveletType::Morlet, WtResultMode::Phase),
-            TTViewParams::transform_wavelet(WaveletType::Morlet, WtResultMode::Magnitude),
             TTViewParams::time_default(),
+            TTViewParams::wavelet_wavelet(WaveletType::Morlet, WtResultMode::Phase),
+            TTViewParams::wavelet_wavelet(WaveletType::Morlet, WtResultMode::Magnitude),
         ];
         let roi = Arc::new(SemiAtomicRect::new((0, 0), (1, 1), (1, 1)));
         // let (mut views_gui, mut views_backend) : ([TTViewGUI; 4], [TTViewBackend; 4]) =
@@ -485,20 +485,20 @@ impl TTStateGUI
                     {
                         self.file
                             .state
-                            .store(FileState::Processing, Ordering::Relaxed);
+                            .store(FileState::ProcessingWavelet, Ordering::Relaxed);
                         let frames = self.file.frames.load(Ordering::Relaxed);
                         //enable views generation
                         self.views.iter_mut().for_each(|view| {
                             let mut params = (*view.params.input_buffer()).clone();
                             match params
                             {
-                                TransformView(mut tparams) =>
+                                WaveletView(mut tparams) =>
                                 {
                                     tparams.scale.max = frames;
                                     tparams.scale.val = 1;
                                     tparams.scale.min = 1;
                                     tparams.time.max = tparams.scale.max - tparams.scale.val;
-                                    params = TransformView(tparams)
+                                    params = WaveletView(tparams)
                                 }
                                 TimeView(mut tparams) =>
                                 {
@@ -518,10 +518,10 @@ impl TTStateGUI
                         ui.label(" Processing...");
                         ui.spinner();
                     }
-                    (Some(path), FileState::Processing) =>
+                    (Some(path), FileState::ProcessingWavelet) =>
                     {
                         ui.label(path.to_string_lossy());
-                        ui.label(" Processing...");
+                        ui.label(" Processing Wavelet transforms...");
                         ui.spinner();
                     }
                     (Some(path), _) =>

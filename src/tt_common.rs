@@ -23,7 +23,7 @@ pub enum FileState
     New,
     Loading,
     Loaded,
-    Processing,
+    ProcessingWavelet,
     Ready,
 }
 
@@ -72,7 +72,7 @@ pub enum TTGradients
     Phase,
 }
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
-pub struct TransformViewParams
+pub struct WaveletViewParams
 {
     pub scale :   RangedVal,
     pub time :    RangedVal,
@@ -99,70 +99,10 @@ pub struct TimeViewParams
 #[strum(serialize_all = "title_case")]
 pub enum TTViewParams
 {
-    TransformView(TransformViewParams),
+    WaveletView(WaveletViewParams),
     TimeView(TimeViewParams),
 }
-
-impl TTViewParams
-{
-    pub fn time_default() -> Self
-    {
-        TimeView(TimeViewParams {
-            time :    Default::default(),
-            denoise : true,
-        })
-    }
-    pub fn transform_default() -> Self
-    {
-        TransformView(TransformViewParams {
-            scale :   Default::default(),
-            time :    Default::default(),
-            wavelet : Default::default(),
-            mode :    Default::default(),
-            denoise : true,
-        })
-    }
-    pub fn time_frames(frames : usize, denoise : bool) -> Self
-    {
-        TimeView(TimeViewParams {
-            time : RangedVal {
-                val : 0,
-                min : 0,
-                max : frames - 1,
-            },
-            denoise,
-        })
-    }
-    pub fn transform_frames(frames : usize, denoise : bool) -> Self
-    {
-        TransformView(TransformViewParams {
-            time : RangedVal {
-                val : 0,
-                min : 0,
-                max : frames - 1,
-            },
-            scale : RangedVal {
-                val : 1,
-                min : 1,
-                max : frames,
-            },
-            wavelet : Default::default(),
-            mode : Default::default(),
-            denoise,
-        })
-    }
-    pub fn transform_wavelet(wavelet : WaveletType, mode : WtResultMode) -> Self
-    {
-        TransformView(TransformViewParams {
-            time : Default::default(),
-            scale : Default::default(),
-            wavelet,
-            mode,
-            denoise : true,
-        })
-    }
-}
-pub use TTViewParams::{TimeView, TransformView};
+pub use TTViewParams::*;
 
 //=======================================
 //=====Traits & Trait Implementations====
@@ -187,7 +127,7 @@ impl EnumUpdate<TTViewParams> for TTViewParams
     fn update(&mut self, new_val : &str)
     {
         let timeview : &'static str = Self::time_default().into();
-        let transformview : &'static str = Self::transform_default().into();
+        let waveletview : &'static str = Self::wavelet_default().into();
         let frames;
         let denoise;
         match self
@@ -197,7 +137,7 @@ impl EnumUpdate<TTViewParams> for TTViewParams
                 frames = params.time.max + 1;
                 denoise = params.denoise;
             }
-            TransformView(params) =>
+            WaveletView(params) =>
             {
                 frames = params.scale.max;
                 denoise = params.denoise;
@@ -207,9 +147,9 @@ impl EnumUpdate<TTViewParams> for TTViewParams
         {
             *self = Self::time_frames(frames, denoise)
         }
-        else if transformview == new_val
+        else if waveletview == new_val
         {
-            *self = Self::transform_frames(frames, denoise)
+            *self = Self::wavelet_frames(frames, denoise)
         }
         else
         {
@@ -407,6 +347,65 @@ impl TTGradients
     }
 }
 
+impl TTViewParams
+{
+    pub fn time_default() -> Self
+    {
+        TimeView(TimeViewParams {
+            time :    Default::default(),
+            denoise : true,
+        })
+    }
+    pub fn wavelet_default() -> Self
+    {
+        WaveletView(WaveletViewParams {
+            scale :   Default::default(),
+            time :    Default::default(),
+            wavelet : Default::default(),
+            mode :    Default::default(),
+            denoise : true,
+        })
+    }
+    pub fn time_frames(frames : usize, denoise : bool) -> Self
+    {
+        TimeView(TimeViewParams {
+            time : RangedVal {
+                val : 0,
+                min : 0,
+                max : frames - 1,
+            },
+            denoise,
+        })
+    }
+    pub fn wavelet_frames(frames : usize, denoise : bool) -> Self
+    {
+        WaveletView(WaveletViewParams {
+            time : RangedVal {
+                val : 0,
+                min : 0,
+                max : frames - 1,
+            },
+            scale : RangedVal {
+                val : 1,
+                min : 1,
+                max : frames,
+            },
+            wavelet : Default::default(),
+            mode : Default::default(),
+            denoise,
+        })
+    }
+    pub fn wavelet_wavelet(wavelet : WaveletType, mode : WtResultMode) -> Self
+    {
+        WaveletView(WaveletViewParams {
+            time : Default::default(),
+            scale : Default::default(),
+            wavelet,
+            mode,
+            denoise : true,
+        })
+    }
+}
 //=======================================
 //================Statics================
 //=======================================

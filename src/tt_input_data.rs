@@ -1,6 +1,4 @@
 use ndarray::{Array, Array3};
-use rayon::prelude::IntoParallelIterator;
-use rayon::prelude::ParallelIterator;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::prelude::*;

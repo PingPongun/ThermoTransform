@@ -116,13 +116,13 @@ impl TTLazyCWT
         let time_iter = input.lanes(Axis(0)).into_iter().into_par_iter();
         let iter = IndexedParallelIterator::zip(time_iter, integrated_iter);
         iter.for_each(|(lane_non_integrated, lane_integrals)| {
-            if FileState::Processing == file_state.load(Ordering::Relaxed)
+            if FileState::ProcessingWavelet == file_state.load(Ordering::Relaxed)
             {
                 gen_integrals(lane_non_integrated, lane_integrals);
             }
         });
 
-        if FileState::Processing == file_state.load(Ordering::Relaxed)
+        if FileState::ProcessingWavelet == file_state.load(Ordering::Relaxed)
         {
             Some(integrated)
         }
@@ -131,8 +131,7 @@ impl TTLazyCWT
             None
         }
     }
-    pub fn cwt(&self, wavelet_bank : &mut WaveletBank, params : &TransformViewParams)
-        -> Array2<f64>
+    pub fn cwt(&self, wavelet_bank : &mut WaveletBank, params : &WaveletViewParams) -> Array2<f64>
     {
         let wavelet = wavelet_bank.get_mut(&params.wavelet).unwrap(); //`WaveletBank` should have entries for all WaveletType-enum wariants, if not this is an error in code so panic is apropriate
         let polywise = wavelet.get_poly_wise(params.scale.val);
