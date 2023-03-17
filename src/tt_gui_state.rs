@@ -476,7 +476,8 @@ impl TTStateGUI
     pub fn show(&mut self, ui : &mut egui::Ui) -> ()
     {
         ui.vertical(|ui| {
-            ui.heading("ThermoTransform v0.1");
+            let header = format!("ThermoTransform {}", env!("CARGO_PKG_VERSION"));
+            ui.heading(header);
             ui.horizontal(|ui| {
                 ui.label("Input file: ");
                 let (path, file_state) = self.get_file();
