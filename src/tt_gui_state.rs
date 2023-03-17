@@ -492,7 +492,7 @@ impl TTStateGUI
                     {
                         self.file
                             .state
-                            .store(FileState::ProcessingWavelet, Ordering::Relaxed);
+                            .store(FileState::ProcessingFourier, Ordering::Relaxed);
                         let frames = self.file.frames.load(Ordering::Relaxed);
                         //enable views generation
                         self.views.iter_mut().for_each(|view| {

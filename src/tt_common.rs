@@ -22,8 +22,8 @@ pub enum FileState
     New,
     Loading,
     Loaded,
-    ProcessingWavelet,
     ProcessingFourier,
+    ProcessingWavelet,
     Ready,
 }
 #[derive(

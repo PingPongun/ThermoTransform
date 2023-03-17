@@ -349,46 +349,6 @@ impl TTStateBackend
                 FileState::Loaded =>
                     //this state is only for gui to acknowlege processing completed
                     {}
-                FileState::ProcessingWavelet =>
-                {
-                    if let Some(input) = &self.file.input_data
-                    {
-                        self.file.lazy_cwt = None;
-                        rayon::join(
-                            || {
-                                //continously update time views if necessary
-                                while FileState::ProcessingWavelet
-                                    == self.file.state.load(Ordering::Relaxed)
-                                    && self.stop_flag.load(Ordering::Relaxed) == false
-                                {
-                                    for view in &mut self.views
-                                    {
-                                        view.time_view_check_update(&self.file.input_data);
-                                    }
-                                }
-                            },
-                            || {
-                                self.file.lazy_cwt =
-                                    TTLazyCWT::new(&input.data, self.file.state.clone());
-
-                                if let Some(_) = &self.file.lazy_cwt
-                                {
-                                    //file processed correctly
-                                    let _ = self.file.state.compare_exchange(
-                                        FileState::ProcessingWavelet,
-                                        FileState::ProcessingFourier,
-                                        Ordering::SeqCst,
-                                        Ordering::Acquire,
-                                    );
-                                }
-                            },
-                        );
-                    }
-                    else
-                    {
-                        unreachable!()
-                    }
-                }
                 FileState::ProcessingFourier =>
                 {
                     if let Some(input) = &self.file.input_data
@@ -404,10 +364,6 @@ impl TTStateBackend
                                     for view in &mut self.views
                                     {
                                         view.time_view_check_update(&self.file.input_data);
-                                        view.wavelet_view_check_update(
-                                            &self.file.lazy_cwt,
-                                            &mut self.wavelet_bank,
-                                        );
                                     }
                                 }
                             },
@@ -420,6 +376,47 @@ impl TTStateBackend
                                     //file processed correctly
                                     let _ = self.file.state.compare_exchange(
                                         FileState::ProcessingFourier,
+                                        FileState::ProcessingWavelet,
+                                        Ordering::SeqCst,
+                                        Ordering::Acquire,
+                                    );
+                                }
+                            },
+                        );
+                    }
+                    else
+                    {
+                        unreachable!()
+                    }
+                }
+                FileState::ProcessingWavelet =>
+                {
+                    if let Some(fourier) = &self.file.fourier
+                    {
+                        self.file.lazy_cwt = None;
+                        rayon::join(
+                            || {
+                                //continously update time views if necessary
+                                while FileState::ProcessingWavelet
+                                    == self.file.state.load(Ordering::Relaxed)
+                                    && self.stop_flag.load(Ordering::Relaxed) == false
+                                {
+                                    for view in &mut self.views
+                                    {
+                                        view.time_view_check_update(&self.file.input_data);
+                                        view.fourier_view_check_update(&self.file.fourier);
+                                    }
+                                }
+                            },
+                            || {
+                                self.file.lazy_cwt =
+                                    TTLazyCWT::new(&fourier, self.file.state.clone());
+
+                                if let Some(_) = &self.file.lazy_cwt
+                                {
+                                    //file processed correctly
+                                    let _ = self.file.state.compare_exchange(
+                                        FileState::ProcessingWavelet,
                                         FileState::Ready,
                                         Ordering::SeqCst,
                                         Ordering::Acquire,
