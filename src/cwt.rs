@@ -69,9 +69,9 @@ impl TTLazyCWT
                             //x0, x1, x2 -> (2*x0-x2), (2*x0-x1), x0, x1, x2
                             let s0 = (-s0) as usize;
                             integral_s0 = [
-                                f64::mul_add(integrals.0[0], 2.0, integrals.0[s0]),
-                                f64::mul_add(integrals.1[0], 2.0, integrals.1[s0]),
-                                f64::mul_add(integrals.2[0], 2.0, integrals.2[s0]),
+                                f64::mul_add(integrals.0[0], 2.0, -integrals.0[s0]),
+                                f64::mul_add(integrals.1[0], 2.0, -integrals.1[s0]),
+                                f64::mul_add(integrals.2[0], 2.0, -integrals.2[s0]),
                             ];
                         }
                         else
@@ -84,9 +84,9 @@ impl TTLazyCWT
                             //wavelet "goes beyond" signal ...
                             let sJ = (2 * last_idx_isize - sJ) as usize;
                             integral_sJ = [
-                                f64::mul_add(integrals.0[last_idx], 2.0, integrals.0[sJ]),
-                                f64::mul_add(integrals.1[last_idx], 2.0, integrals.1[sJ]),
-                                f64::mul_add(integrals.2[last_idx], 2.0, integrals.2[sJ]),
+                                f64::mul_add(integrals.0[last_idx], 2.0, -integrals.0[sJ]),
+                                f64::mul_add(integrals.1[last_idx], 2.0, -integrals.1[sJ]),
+                                f64::mul_add(integrals.2[last_idx], 2.0, -integrals.2[sJ]),
                             ];
                         }
                         else
@@ -105,7 +105,7 @@ impl TTLazyCWT
                             if s < 0
                             {
                                 accum = f64::mul_add(
-                                    f64::mul_add(integrals.3[0], 2.0, integrals.3[(-s) as usize]),
+                                    f64::mul_add(integrals.3[0], 2.0, -integrals.3[(-s) as usize]),
                                     point.y,
                                     accum,
                                 )
@@ -116,7 +116,7 @@ impl TTLazyCWT
                                     f64::mul_add(
                                         integrals.3[last_idx],
                                         2.0,
-                                        integrals.3[(2 * last_idx_isize - s) as usize],
+                                        -integrals.3[(2 * last_idx_isize - s) as usize],
                                     ),
                                     point.y,
                                     accum,
