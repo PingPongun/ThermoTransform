@@ -497,7 +497,7 @@ impl ExecutionTimeMeas
         let duration = self.stop();
         #[cfg(feature = "time_meas")]
         {
-            write!(self.writer, "{}: {:?}\n", _text, duration);
+            let _ = write!(self.writer, "{}: {:?}\n", _text, duration);
             let _ = self.writer.flush();
         }
         duration

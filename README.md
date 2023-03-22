@@ -4,8 +4,8 @@
 
 - ROI auto-zoom [HP]
 - spatial-temporal wavelet transform [HP]
-- signal extension before fourier [?NP]
-- .vpr input file format support [NP]
+- ~~signal extension before fourier [?NP]~~
+- ~~.vpr input file format support [NP]~~
 - display scale unit & exponent [NP]
 - support more wavelets [NP]
 - save view as .png[?] & .txt [LP]

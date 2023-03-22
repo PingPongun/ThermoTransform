@@ -1,4 +1,5 @@
 #![warn(clippy::all, rust_2018_idioms)]
+#![allow(nonstandard_style)]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
 // When compiling natively:
@@ -12,7 +13,7 @@ fn main()
         drag_and_drop_support : true,
         ..Default::default()
     };
-    eframe::run_native(
+    let _ = eframe::run_native(
         "ThermoTransform",
         native_options,
         Box::new(|cc| Box::new(ThermoTransform::ThermoTransformApp::new(cc))),

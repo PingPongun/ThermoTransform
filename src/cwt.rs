@@ -65,7 +65,7 @@ impl TTLazyCWT
                         let last_idx_isize = last_idx as isize;
                         if s0 < 0
                         {
-                            //wavelet "goes beyond" signal => extend signal using antisymetric whole-point extension
+                            //wavelet "goes beyond" signal => extend signal using antisymetric half-point extension
                             //x0, x1, x2 -> (2*x0-x2), (2*x0-x1), x0, x1, x2
                             let s0 = (-s0) as usize;
                             integral_s0 = [
