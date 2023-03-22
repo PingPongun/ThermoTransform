@@ -16,5 +16,5 @@
 - hints & help [ULP]
 - perf. optimization [ULP]
   - file loading time
-  - cwt integration time
+  - faster fft(signal extension to len=2^k*3^n) (->cwt integration & fourier)
   - faster gui refresh after param changes

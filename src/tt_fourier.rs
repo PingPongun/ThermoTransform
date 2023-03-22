@@ -8,6 +8,8 @@ use num_complex::Complex;
 use num_complex::Complex64;
 use rayon::prelude::IndexedParallelIterator;
 use rayon::prelude::IntoParallelIterator;
+use rayon::prelude::IntoParallelRefIterator;
+use rayon::prelude::IntoParallelRefMutIterator;
 use rayon::prelude::ParallelIterator;
 use std::f64::consts::PI;
 use std::mem;
@@ -24,7 +26,7 @@ pub struct TTFourier
 #[derive(Clone)]
 struct TTFourierUninit
 {
-    data : Array3<Complex<MaybeUninit<f64>>>,
+    data : Array3<MaybeUninit<Complex<f64>>>,
 }
 
 impl TTFourierUninit
@@ -43,7 +45,7 @@ impl TTFourierUninit
         for elem in &mut uninit_data[..]
         {
             elem.write(TTFourierUninit {
-                data : Array3::uninit(shape).map(|x| unsafe { x.assume_init() }),
+                data : Array3::uninit(shape),
             });
         }
 
@@ -100,50 +102,69 @@ impl TTFourier
         // 1/(2*i*PI*f_k) -> w/i where w=1/(2*PI*f_k)
         // w/i-> -w*i
         // X_k= X_k_r + i*X_k_i
-        // X_k*(-w*i)           -> w*X_k_i - i*w*X_k_r
+        // X_k*(-w*i)           ->  w1*X_k_i - i*w1*X_k_r
+        // X_k*(-w*i)^2         -> -w2*X_k_r - i*w2*X_k_i
+        // X_k*(-w*i)^3         -> -w3*X_k_i + i*w3*X_k_r
+        // X_k*(-w*i)^4         ->  w4*X_k_r + i*w4*X_k_i
         let shape = self.data.dim();
 
         let mut uninit_data : [TTFourierUninit; N] = TTFourierUninit::new(shape);
-        let w_coeff = (0..shape.0)
-            .map(|x| {
-                let w = 1.0 / (2.0 * x as f64 * PI);
-                (w, -w)
-            })
+        let w_coeff_base = (0..shape.0)
+            .map(|x| 1.0 / (2.0 * x as f64 * PI))
             .collect::<Vec<_>>();
-        uninit_data[0]
-            .data
-            .axis_iter_mut(Axis(0))
-            .into_par_iter()
-            .zip(self.data.axis_iter(Axis(0)))
-            .zip(w_coeff.clone())
-            .for_each(|((mut oarray, iarray), w)| {
-                oarray.zip_mut_with(&iarray, |o, i| {
-                    o.re = MaybeUninit::new(w.0 * i.im);
-                    o.im = MaybeUninit::new(w.1 * i.re);
-                })
-            });
-        let celled : Vec<_> = uninit_data.iter_mut().map(|x| x.data.cell_view()).collect();
-        //TODO ? paralellization
-        celled.windows(2).for_each(|x| {
-            x[1].axis_iter(Axis(0))
-                .zip(x[0].axis_iter(Axis(0)))
-                .zip(w_coeff.clone())
-                .for_each(|((oarray, iarray), w)| {
-                    oarray.iter().zip(iarray.iter()).for_each(|(o, i)| {
-                        let i = unsafe { (i.as_ptr() as *const Complex64).read() }; //it's safe becouse i~iarray~x[0] was initialized in previous step
-                        let o = o.as_ptr();
-                        unsafe {
-                            (*o).re = MaybeUninit::new(w.0 * i.im);
-                            (*o).im = MaybeUninit::new(w.1 * i.re);
-                        }
+
+        //initialize integrals 1st, 3rd, 5th,..
+        uninit_data
+            .iter_mut()
+            .enumerate()
+            .step_by(2)
+            .for_each(|(idx, x)| {
+                x.data
+                    .axis_iter_mut(Axis(0))
+                    .into_par_iter()
+                    .zip(self.data.axis_iter(Axis(0)))
+                    .zip(w_coeff_base.par_iter())
+                    .for_each(|((mut oarray, iarray), w)| {
+                        //* ((1 - (idx & 0x2) as isize) as f64) == -1 when idx= 3,7,11,.. ; == 1 when idx= 1,5,9,..
+                        let w = w.powi(idx as i32) * ((1 - (idx & 0x2) as isize) as f64);
+                        let w = (w, -w);
+                        oarray.zip_mut_with(&iarray, |o, i| {
+                            o.write(Complex64 {
+                                re : w.0 * i.im,
+                                im : w.1 * i.re,
+                            });
+                        })
                     })
-                });
-        });
+            });
+        //initialize integrals 2nd, 4th, 6th,..
+        uninit_data
+            .iter_mut()
+            .enumerate()
+            .skip(1)
+            .step_by(2)
+            .for_each(|(idx, x)| {
+                x.data
+                    .axis_iter_mut(Axis(0))
+                    .into_par_iter()
+                    .zip(self.data.axis_iter(Axis(0)))
+                    .zip(w_coeff_base.par_iter())
+                    .for_each(|((mut oarray, iarray), w)| {
+                        //* ((1 - (idx & 0x2) as isize) as f64) == -1 when idx= 2,6,10,.. ; == 1 when idx= 4,8,12,..
+                        let w = w.powi(idx as i32) * ((1 - (idx & 0x2) as isize) as f64);
+                        oarray.zip_mut_with(&iarray, |o, i| {
+                            o.write(Complex64 {
+                                re : w * i.re,
+                                im : w * i.im,
+                            });
+                        })
+                    })
+            });
+
         // Everything is initialized. Transmute the array to the
         // initialized type.
         let ptr = &mut uninit_data as *mut _ as *mut [TTFourier; N];
         let mut res = unsafe { ptr.read() };
-        res.iter_mut().for_each(|x| {
+        res.par_iter_mut().for_each(|x| {
             let fill = Complex64::new(0.0, 0.0);
             x.data.index_axis_mut(Axis(0), 0).fill(fill);
         });
