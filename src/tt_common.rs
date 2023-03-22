@@ -1,10 +1,18 @@
 use atomic_enum::atomic_enum;
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 use lazy_static::*;
+
+#[cfg(feature = "time_meas")]
+use std::fs::File;
+#[cfg(feature = "time_meas")]
+use std::io::BufWriter;
+#[cfg(feature = "time_meas")]
+use std::io::Write;
 use std::iter;
 use std::mem::ManuallyDrop;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 use strum::VariantNames;
 use strum_macros::{EnumString, EnumVariantNames};
 
@@ -122,6 +130,13 @@ pub enum TTViewParams
     FourierView(FourierViewParams),
 }
 pub use TTViewParams::*;
+
+pub struct ExecutionTimeMeas
+{
+    last_time : Instant,
+    #[cfg(feature = "time_meas")]
+    writer :    BufWriter<File>,
+}
 
 //=======================================
 //=====Traits & Trait Implementations====
@@ -459,6 +474,40 @@ impl TTViewParams
             display_mode : mode,
             denoise : true,
         })
+    }
+}
+
+impl ExecutionTimeMeas
+{
+    pub fn new(_file_name : &str) -> Self
+    {
+        let temp = Instant::now();
+        #[cfg(feature = "time_meas")]
+        let f = File::create(_file_name).unwrap();
+        Self {
+            last_time : temp,
+
+            #[cfg(feature = "time_meas")]
+            writer :                               BufWriter::new(f),
+        }
+    }
+    pub fn start(&mut self) { self.last_time = Instant::now(); }
+    pub fn stop_print(&mut self, _text : &str) -> Duration
+    {
+        let duration = self.stop();
+        #[cfg(feature = "time_meas")]
+        {
+            write!(self.writer, "{}: {:?}\n", _text, duration);
+            let _ = self.writer.flush();
+        }
+        duration
+    }
+    pub fn stop(&mut self) -> Duration
+    {
+        let new_time = Instant::now();
+        let duration = new_time.duration_since(self.last_time);
+        self.last_time = new_time;
+        duration
     }
 }
 //=======================================

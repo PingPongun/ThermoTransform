@@ -295,6 +295,7 @@ impl TTStateBackend
     }
     pub fn run(mut self) -> ()
     {
+        let mut exec_time = ExecutionTimeMeas::new("exec_time.txt");
         while self.stop_flag.load(Ordering::Relaxed) == false
         {
             match self.file.state.load(Ordering::Relaxed)
@@ -320,7 +321,9 @@ impl TTStateBackend
                     self.file.lazy_cwt = None;
                     if let Some(path) = self.file.path.read()
                     {
+                        exec_time.start();
                         self.file.input_data = TTInputData::new(path, self.file.state.clone());
+                        exec_time.stop_print("file loading time");
                     }
                     else
                     {
@@ -353,6 +356,7 @@ impl TTStateBackend
                 {
                     if let Some(input) = &self.file.input_data
                     {
+                        exec_time.start();
                         self.file.fourier = None;
                         rayon::join(
                             || {
@@ -383,6 +387,7 @@ impl TTStateBackend
                                 }
                             },
                         );
+                        exec_time.stop_print("fft time");
                     }
                     else
                     {
@@ -393,6 +398,7 @@ impl TTStateBackend
                 {
                     if let Some(fourier) = &self.file.fourier
                     {
+                        exec_time.start();
                         self.file.lazy_cwt = None;
                         rayon::join(
                             || {
@@ -424,6 +430,7 @@ impl TTStateBackend
                                 }
                             },
                         );
+                        exec_time.stop_print("wavelet prep. time");
                     }
                     else
                     {
