@@ -1,6 +1,8 @@
 use atomic_enum::atomic_enum;
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 use lazy_static::*;
+use static_assertions::assert_eq_align;
+use static_assertions::assert_eq_size;
 
 #[cfg(feature = "time_meas")]
 use std::fs::File;
@@ -67,8 +69,8 @@ pub union AtomicPoint
     split :  (u16, u16),
     point :  Point<u16, u16>,
 }
-assert_eq!(std::mem::size_of::<AtomicPoint>(), 4);
-assert_eq!(std::mem::align_of::<AtomicPoint>(), 4);
+assert_eq_size!(AtomicPoint, u32);
+assert_eq_align!(AtomicPoint, u32);
 
 pub struct SemiAtomicRect
 {

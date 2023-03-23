@@ -28,6 +28,7 @@ mathru="0.14"
 lazy_static="1.4"
 ndarray-ndimage = "0.3.0"
 ndrustfft = "0.4.0"
+static_assertions = "1.1.0"
 
 [patch.crates-io]
 ndarray={git="https://github.com/PingPongun/ndarray.git", branch = "master"}

@@ -23,6 +23,7 @@ dependencies = [
  "rayon",
  "rfd",
  "serde",
+ "static_assertions",
  "strum",
  "strum_macros",
  "tracing-subscriber",
