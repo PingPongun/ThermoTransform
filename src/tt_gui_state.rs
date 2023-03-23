@@ -33,10 +33,10 @@ use crate::wavelet::WaveletType;
 
 pub struct TTViewGUI
 {
-    state :  Arc<AtomicTTViewState>,
-    image :  tribuf::Output<Thermogram>,
-    params : tribuf::Input<TTViewParams>,
-    roi :    Arc<SemiAtomicRect>,
+    state :    Arc<AtomicTTViewState>,
+    image :    tribuf::Output<Thermogram>,
+    params :   tribuf::Input<TTViewParams>,
+    settings : Arc<GlobalSettings>,
 }
 
 pub struct TTFileGUI
@@ -44,7 +44,6 @@ pub struct TTFileGUI
     frames : Arc<AtomicUsize>,
     state :  Arc<AtomicFileState>,
     path :   tribuf::Input<Option<OsString>>,
-    roi :    Arc<SemiAtomicRect>,
 }
 
 pub struct TTStateGUI
@@ -54,6 +53,7 @@ pub struct TTStateGUI
     stop_flag :      Arc<AtomicBool>,
     file :           TTFileGUI,
     backend_handle : Option<JoinHandle<()>>,
+    settings :       Arc<GlobalSettings>,
 }
 
 //=======================================
@@ -79,6 +79,32 @@ impl BoolSwitchable<bool> for bool
         if ui.button(text).clicked()
         {
             *self = !*self;
+            retval = true;
+        }
+        retval
+    }
+}
+trait AtomicBoolSwitchable<T>
+{
+    fn show_switchable(&self, ui : &mut egui::Ui, text : &str) -> bool;
+}
+impl AtomicBoolSwitchable<AtomicBool> for AtomicBool
+{
+    fn show_switchable(&self, ui : &mut egui::Ui, text : &str) -> bool
+    {
+        let mut retval = false;
+        let self_val = self.load(Ordering::Relaxed);
+        let text = if self_val == true
+        {
+            RichText::new(text)
+        }
+        else
+        {
+            RichText::new(text).strikethrough()
+        };
+        if ui.button(text).clicked()
+        {
+            self.store(!self_val, Ordering::Relaxed);
             retval = true;
         }
         retval
@@ -142,9 +168,10 @@ impl Thermogram
     fn show(
         &self,
         ui : &mut egui::Ui,
-        roi : &Arc<SemiAtomicRect>,
+        settings : &Arc<GlobalSettings>,
     ) -> (bool, egui::InnerResponse<()>)
     {
+        let roi = &settings.roi;
         let available_size = ui.available_size();
         let image_aspect = self.image.aspect_ratio();
         let mut retval = false;
@@ -170,41 +197,64 @@ impl Thermogram
             let roi_min = roi.min.get();
             let roi_max = roi.max.get();
             let full_size = roi.full_size.get();
+            let roi_zoom = settings.roi_zoom.load(Ordering::Relaxed);
+            let mut click_action = |min| {
+                let click_pos = img_rsp.interact_pointer_pos().unwrap();
+                if roi_zoom
+                {
+                    let (width, height) = (roi_max.x - roi_min.x, roi_max.y - roi_min.y);
+                    roi.set(
+                        (roi_min.x as f32
+                            + width as f32 * (click_pos.x - img_rsp.rect.min.x) / size.x)
+                            as u16,
+                        (roi_min.y as f32
+                            + height as f32 * (click_pos.y - img_rsp.rect.min.y) / size.y)
+                            as u16,
+                        min,
+                    );
+                }
+                else
+                {
+                    //roi zoom not enabled
+                    roi.set(
+                        (full_size.x as f32 * (click_pos.x - img_rsp.rect.min.x) / size.x) as u16,
+                        (full_size.y as f32 * (click_pos.y - img_rsp.rect.min.y) / size.y) as u16,
+                        min,
+                    );
+                }
+                settings.changed(true);
+                retval = true;
+            };
             if img_rsp.clicked()
             {
                 //left click
-                let click_pos = img_rsp.interact_pointer_pos().unwrap();
-                roi.set_max(
-                    (full_size.x as f32 * (click_pos.x - img_rsp.rect.min.x) / size.x) as u16,
-                    (full_size.y as f32 * (click_pos.y - img_rsp.rect.min.y) / size.y) as u16,
-                );
-                settings.changed(true);
-                retval = true;
+                click_action(false);
             }
             else if img_rsp.secondary_clicked()
             {
                 //right click
-                let click_pos = img_rsp.interact_pointer_pos().unwrap();
-                roi.set_min(
-                    (full_size.x as f32 * (click_pos.x - img_rsp.rect.min.x) / size.x) as u16,
-                    (full_size.y as f32 * (click_pos.y - img_rsp.rect.min.y) / size.y) as u16,
-                );
-                settings.changed(true);
-                retval = true;
+                click_action(true);
             }
             else
             { //roi has not changed/ image not clicked
             }
             ui.painter_at(img_rsp.rect).rect_stroke(
-                Rect {
-                    min : Pos2::new(
-                        roi_min.x as f32 / full_size.x as f32 * size.x + img_rsp.rect.min.x,
-                        roi_min.y as f32 / full_size.y as f32 * size.y + img_rsp.rect.min.y,
-                    ),
-                    max : Pos2::new(
-                        roi_max.x as f32 / full_size.x as f32 * size.x + img_rsp.rect.min.x,
-                        roi_max.y as f32 / full_size.y as f32 * size.y + img_rsp.rect.min.y,
-                    ),
+                if roi_zoom
+                {
+                    img_rsp.rect
+                }
+                else
+                {
+                    Rect {
+                        min : Pos2::new(
+                            roi_min.x as f32 / full_size.x as f32 * size.x + img_rsp.rect.min.x,
+                            roi_min.y as f32 / full_size.y as f32 * size.y + img_rsp.rect.min.y,
+                        ),
+                        max : Pos2::new(
+                            roi_max.x as f32 / full_size.x as f32 * size.x + img_rsp.rect.min.x,
+                            roi_max.y as f32 / full_size.y as f32 * size.y + img_rsp.rect.min.y,
+                        ),
+                    }
                 },
                 0.0,
                 Stroke::new(3.0, Color32::YELLOW),
@@ -307,7 +357,7 @@ fn tt_view_new(
     name : &str,
     params : TTViewParams,
     ctx : &Context,
-    roi : Arc<SemiAtomicRect>,
+    settings : Arc<GlobalSettings>,
 ) -> (TTViewGUI, TTViewBackend)
 {
     let (image_input, image_output) = triple_buffer(&Thermogram::new(ctx.load_texture(
@@ -319,16 +369,16 @@ fn tt_view_new(
     let state = Arc::new(AtomicTTViewState::new(TTViewState::Invalid));
     (
         TTViewGUI {
-            state :  state.clone(),
-            image :  image_output,
-            params : params_input,
-            roi :    roi.clone(),
+            state :    state.clone(),
+            image :    image_output,
+            params :   params_input,
+            settings : settings.clone(),
         },
         TTViewBackend {
             state :      state,
             thermogram : image_input,
             params :     params_output,
-            roi :        roi.clone(),
+            settings :   settings.clone(),
         },
     )
 }
@@ -378,12 +428,12 @@ impl TTViewGUI
                     {
                         TTViewState::Valid =>
                         {
-                            let (changed, _rsp) = gram.show(ui, &self.roi);
+                            let (changed, _rsp) = gram.show(ui, &self.settings);
                             retval |= changed;
                         }
                         TTViewState::Processing | TTViewState::Changed =>
                         {
-                            let (changed, rsp) = gram.show(ui, &self.roi);
+                            let (changed, rsp) = gram.show(ui, &self.settings);
                             retval |= changed;
                             ui.put(rsp.response.rect, Spinner::default());
                         }
@@ -407,10 +457,13 @@ impl TTStateGUI
             TTViewParams::wavelet_wavelet(WaveletType::Morlet, ComplexResultMode::Magnitude),
             TTViewParams::fourier_default(),
         ];
-        let roi = Arc::new(SemiAtomicRect::new((0, 0), (1, 1), (1, 1)));
+        let settings = Arc::new(GlobalSettings::new(
+            SemiAtomicRect::new((0, 0), (1, 1), (1, 1)),
+            AtomicBool::new(false),
+        ));
         // let (mut views_gui, mut views_backend) : ([TTViewGUI; 4], [TTViewBackend; 4]) =
         let [(g1,b1),(g2,b2),(g3,b3),(g4,b4)] //: [(TTViewGUI, TTViewBackend); 4] 
-        = default_view_params.map( |x| tt_view_new("TTParams",x, ctx,roi.clone()));
+        = default_view_params.map( |x| tt_view_new("TTParams",x, ctx,settings.clone()));
 
         let (path_gui, path_backend) = triple_buffer(&None);
 
@@ -426,8 +479,8 @@ impl TTStateGUI
                 frames : frames.clone(),
                 state :  state.clone(),
                 path :   path_gui,
-                roi :    roi.clone(),
             },
+            settings :       settings.clone(),
             backend_handle : Some(thread::spawn(move || {
                 let backend_state = TTStateBackend::new(
                     [b1, b2, b3, b4],
@@ -436,7 +489,7 @@ impl TTStateGUI
                     frames,
                     state,
                     path_backend,
-                    roi.clone(),
+                    settings.clone(),
                 );
                 backend_state.run();
             })),
@@ -475,6 +528,7 @@ impl TTStateGUI
 {
     pub fn show(&mut self, ui : &mut egui::Ui) -> ()
     {
+        let mut changed = false;
         ui.vertical(|ui| {
             let header = format!("ThermoTransform {}", env!("CARGO_PKG_VERSION"));
             ui.heading(header);
@@ -570,10 +624,14 @@ impl TTStateGUI
                     };
                     futures::executor::block_on(future);
                 }
+                if self.settings.roi_zoom.show_switchable(ui, "zoom ROI")
+                {
+                    changed = true;
+                    self.settings.changed(true);
+                }
             });
             let available_height = ui.available_height() / 2.0;
             let available_width = ui.available_width() / 2.0;
-            let mut changed = false;
             TableBuilder::new(ui)
                 .column(Column::exact(available_width))
                 .column(Column::exact(available_width))
@@ -597,7 +655,7 @@ impl TTStateGUI
                 });
             if changed
             {
-                if self.file.roi.changed(false)
+                if self.settings.changed(false)
                 {
                     //if roi has changed refresh all views
                     self.views.iter().for_each(|view| {

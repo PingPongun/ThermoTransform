@@ -2,7 +2,6 @@
 
 ## TODO
 
-- ROI auto-zoom [HP]
 - spatial-temporal wavelet transform [HP]
 - ~~signal extension before fourier [?NP]~~
 - ~~.vpr input file format support [NP]~~

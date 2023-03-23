@@ -2,7 +2,7 @@ use egui::{ColorImage, TextureOptions};
 use ndarray::{s, ArrayView2, Axis};
 use ndarray_ndimage::{convolve, BorderMode};
 use parking_lot::{Condvar, Mutex};
-use rayon::prelude::{IntoParallelIterator, ParallelIterator};
+use rayon::prelude::{IntoParallelIterator, ParallelExtend, ParallelIterator};
 use rayon::slice::ParallelSliceMut;
 use std::f64::consts::{FRAC_1_PI, PI};
 use std::ffi::OsString;
@@ -25,14 +25,13 @@ pub struct TTViewBackend
     pub state :      Arc<AtomicTTViewState>,
     pub thermogram : tribuf::Input<Thermogram>,
     pub params :     tribuf::Output<TTViewParams>,
-    pub roi :        Arc<SemiAtomicRect>,
+    pub settings :   Arc<GlobalSettings>,
 }
 struct TTFileBackend
 {
     frames :     Arc<AtomicUsize>,
     state :      Arc<AtomicFileState>,
     path :       tribuf::Output<Option<OsString>>,
-    roi :        Arc<SemiAtomicRect>,
     input_data : Option<TTInputData>,
     lazy_cwt :   Option<TTLazyCWT>,
     fourier :    Option<TTFourier>,
@@ -45,6 +44,7 @@ pub struct TTStateBackend
     stop_flag :    Arc<AtomicBool>,
     file :         TTFileBackend,
     wavelet_bank : WaveletBank,
+    settings :     Arc<GlobalSettings>,
 }
 
 //=======================================
@@ -152,21 +152,36 @@ impl TTViewBackend
             array.reborrow()
         };
         let array_roi = array.slice(s![
-            self.roi.min.get().y as usize..=self.roi.max.get().y as usize,
-            self.roi.min.get().x as usize..=self.roi.max.get().x as usize
+            self.settings.roi.min.get().y as usize..=self.settings.roi.max.get().y as usize,
+            self.settings.roi.min.get().x as usize..=self.settings.roi.max.get().x as usize
         ]);
-        let roi_len = array_roi.len();
-        let non_roi_len = array.len() - roi_len;
-        //replicate roi pixels `roi_mul`-1 times to ensure that roi pixels occurs(in histogram) as if roi spans above at least 70% of image
-        let roi_mul = (7.0 / 3.0 * non_roi_len as f64 / roi_len as f64).ceil() as usize;
-        let array_iter = array.into_par_iter().cloned();
-
-        let mut array_vec = Vec::with_capacity(non_roi_len + roi_len * roi_mul + 2);
-        array_vec.extend_from_slice(array.as_slice_memory_order().unwrap());
-        let array_roi_iter = array_roi.iter();
-        for _ in 1..roi_mul
+        let array_iter;
+        let mut array_vec;
+        let image_dim;
+        if self.settings.roi_zoom.load(Ordering::Relaxed) == false
         {
-            array_vec.extend(array_roi_iter.clone());
+            let roi_len = array_roi.len();
+            let non_roi_len = array.len() - roi_len;
+            //replicate roi pixels `roi_mul`-1 times to ensure that roi pixels occurs(in histogram) as if roi spans above at least 70% of image
+            let roi_mul = (7.0 / 3.0 * non_roi_len as f64 / roi_len as f64).ceil() as usize;
+            array_iter = array.into_par_iter().cloned();
+
+            array_vec = Vec::with_capacity(non_roi_len + roi_len * roi_mul + 2);
+            array_vec.extend_from_slice(array.as_slice_memory_order().unwrap());
+            let array_roi_iter = array_roi.iter();
+            for _ in 1..roi_mul
+            {
+                array_vec.extend(array_roi_iter.clone());
+            }
+            image_dim = [array.dim().1, array.dim().0];
+        }
+        else
+        {
+            let roi_len = array_roi.len();
+            array_vec = Vec::with_capacity(roi_len + 2);
+            array_iter = array_roi.into_par_iter().cloned();
+            array_vec.par_extend(array_iter.clone());
+            image_dim = [array_roi.dim().1, array_roi.dim().0];
         }
         if grad == TTGradients::Phase
         {
@@ -222,7 +237,7 @@ impl TTViewBackend
             })
             .flatten()
             .collect::<Vec<u8>>();
-        let color_image = ColorImage::from_rgb([array.dim().1, array.dim().0], &rgb);
+        let color_image = ColorImage::from_rgb(image_dim, &rgb);
         gram.image.set(color_image, TextureOptions::LINEAR);
         if grad == TTGradients::Phase
         {
@@ -247,14 +262,12 @@ impl TTFileBackend
         frames : Arc<AtomicUsize>,
         state : Arc<AtomicFileState>,
         path : tribuf::Output<Option<OsString>>,
-        roi : Arc<SemiAtomicRect>,
     ) -> Self
     {
         Self {
             frames,
             state,
             path,
-            roi,
             input_data : None,
             lazy_cwt : None,
             fourier : None,
@@ -270,15 +283,16 @@ impl TTStateBackend
         frames : Arc<AtomicUsize>,
         state : Arc<AtomicFileState>,
         path : tribuf::Output<Option<OsString>>,
-        roi : Arc<SemiAtomicRect>,
+        settings : Arc<GlobalSettings>,
     ) -> Self
     {
         Self {
             views,
             changed,
             stop_flag,
-            file : TTFileBackend::new(frames, state, path, roi),
+            file : TTFileBackend::new(frames, state, path),
             wavelet_bank : WaveletBank::new_wb(),
+            settings,
         }
     }
 

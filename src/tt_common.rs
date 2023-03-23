@@ -77,9 +77,13 @@ pub struct SemiAtomicRect
     pub min :       AtomicPoint,
     pub max :       AtomicPoint,
     pub full_size : AtomicPoint,
-    changed :       AtomicBool,
 }
-
+pub struct GlobalSettings
+{
+    pub roi :      SemiAtomicRect,
+    pub roi_zoom : AtomicBool,
+    changed :      AtomicBool,
+}
 #[atomic_enum]
 #[derive(PartialEq)]
 pub enum TTViewState
@@ -267,32 +271,34 @@ impl SemiAtomicRect
             min :       AtomicPoint { split : min },
             max :       AtomicPoint { split : max },
             full_size : AtomicPoint { split : full },
-            changed :   AtomicBool::new(false),
         }
     }
-    pub fn set_min(&self, x : u16, y : u16)
+
+    pub fn set(&self, x : u16, y : u16, min : bool)
     {
         let (mut x, mut y) = (x, y);
         let full = self.full_size.get();
         x = x.clamp(0, full.x - 1);
         y = y.clamp(0, full.y - 1);
-        let max = self.max.get();
-        self.min.set(u16::min(x, max.x), u16::min(y, max.y));
-        self.max.set(u16::max(x, max.x), u16::max(y, max.y));
+        let other = if min { self.min.get() } else { self.max.get() };
+        self.min.set(u16::min(x, other.x), u16::min(y, other.y));
+        self.max.set(u16::max(x, other.x), u16::max(y, other.y));
     }
-    pub fn set_max(&self, x : u16, y : u16)
-    {
-        let (mut x, mut y) = (x, y);
-        let full = self.full_size.get();
-        x = x.clamp(0, full.x - 1);
-        y = y.clamp(0, full.y - 1);
-        let min = self.min.get();
-        self.min.set(u16::min(x, min.x), u16::min(y, min.y));
-        self.max.set(u16::max(x, min.x), u16::max(y, min.y));
-    }
-    pub fn changed(&self, set : bool) -> bool { self.changed.swap(set, Ordering::Relaxed) }
 }
 
+impl GlobalSettings
+{
+    pub fn new(roi : SemiAtomicRect, roi_zoom : AtomicBool) -> Self
+    {
+        Self {
+            roi,
+            roi_zoom,
+            changed : AtomicBool::new(false),
+        }
+    }
+
+    pub fn changed(&self, set : bool) -> bool { self.changed.swap(set, Ordering::Relaxed) }
+}
 impl Thermogram
 {
     pub fn new(image : TextureHandle) -> Self
