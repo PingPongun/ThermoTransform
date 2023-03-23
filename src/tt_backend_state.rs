@@ -152,8 +152,8 @@ impl TTViewBackend
             array.reborrow()
         };
         let array_roi = array.slice(s![
-            self.roi.min.get().0 as usize..=self.roi.max.get().0 as usize,
-            self.roi.min.get().1 as usize..=self.roi.max.get().1 as usize
+            self.roi.min.get().y as usize..=self.roi.max.get().y as usize,
+            self.roi.min.get().x as usize..=self.roi.max.get().x as usize
         ]);
         let roi_len = array_roi.len();
         let non_roi_len = array.len() - roi_len;
@@ -335,11 +335,17 @@ impl TTStateBackend
                         self.file
                             .frames
                             .store(input.data.len_of(ndarray::Axis(0)), Ordering::Relaxed);
-                        let (x, y) = (input.data.shape()[1] as u16, input.data.shape()[2] as u16);
-                        let min = (x / 8, y / 8);
-                        self.file.roi.min.set(min);
-                        self.file.roi.max.set((min.0 * 7, min.1 * 7));
-                        self.file.roi.full_size.set((x, y));
+                        let size = Point {
+                            x : input.data.shape()[2] as u16,
+                            y : input.data.shape()[1] as u16,
+                        };
+                        let min = Point {
+                            x : size.x / 8,
+                            y : size.y / 8,
+                        };
+                        self.settings.roi.min.set(min.x, min.y);
+                        self.settings.roi.max.set(min.x * 7, min.y * 7);
+                        self.settings.roi.full_size.set(size.x, size.y);
 
                         let _ = self.file.state.compare_exchange(
                             FileState::Loading,

@@ -174,22 +174,22 @@ impl Thermogram
             {
                 //left click
                 let click_pos = img_rsp.interact_pointer_pos().unwrap();
-                roi.set_max((
-                    (full_size.0 as f32 * (click_pos.x - img_rsp.rect.min.x) / size.x) as u16,
-                    (full_size.1 as f32 * (click_pos.y - img_rsp.rect.min.y) / size.y) as u16,
-                ));
-                roi.changed(true);
+                roi.set_max(
+                    (full_size.x as f32 * (click_pos.x - img_rsp.rect.min.x) / size.x) as u16,
+                    (full_size.y as f32 * (click_pos.y - img_rsp.rect.min.y) / size.y) as u16,
+                );
+                settings.changed(true);
                 retval = true;
             }
             else if img_rsp.secondary_clicked()
             {
                 //right click
                 let click_pos = img_rsp.interact_pointer_pos().unwrap();
-                roi.set_min((
-                    (full_size.0 as f32 * (click_pos.x - img_rsp.rect.min.x) / size.x) as u16,
-                    (full_size.1 as f32 * (click_pos.y - img_rsp.rect.min.y) / size.y) as u16,
-                ));
-                roi.changed(true);
+                roi.set_min(
+                    (full_size.x as f32 * (click_pos.x - img_rsp.rect.min.x) / size.x) as u16,
+                    (full_size.y as f32 * (click_pos.y - img_rsp.rect.min.y) / size.y) as u16,
+                );
+                settings.changed(true);
                 retval = true;
             }
             else
@@ -198,12 +198,12 @@ impl Thermogram
             ui.painter_at(img_rsp.rect).rect_stroke(
                 Rect {
                     min : Pos2::new(
-                        roi_min.0 as f32 / full_size.0 as f32 * size.x + img_rsp.rect.min.x,
-                        roi_min.1 as f32 / full_size.1 as f32 * size.y + img_rsp.rect.min.y,
+                        roi_min.x as f32 / full_size.x as f32 * size.x + img_rsp.rect.min.x,
+                        roi_min.y as f32 / full_size.y as f32 * size.y + img_rsp.rect.min.y,
                     ),
                     max : Pos2::new(
-                        roi_max.0 as f32 / full_size.0 as f32 * size.x + img_rsp.rect.min.x,
-                        roi_max.1 as f32 / full_size.1 as f32 * size.y + img_rsp.rect.min.y,
+                        roi_max.x as f32 / full_size.x as f32 * size.x + img_rsp.rect.min.x,
+                        roi_max.y as f32 / full_size.y as f32 * size.y + img_rsp.rect.min.y,
                     ),
                 },
                 0.0,

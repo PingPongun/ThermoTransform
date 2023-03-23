@@ -53,12 +53,23 @@ pub struct RangedVal
     pub min : usize,
     pub max : usize,
 }
+///(x,y)
+#[derive(Clone, Copy, PartialEq)]
+pub struct Point<X, Y>
+{
+    pub x : X,
+    pub y : Y,
+}
 pub union AtomicPoint
 {
     atomic : ManuallyDrop<AtomicU32>,
     simple : u32,
     split :  (u16, u16),
+    point :  Point<u16, u16>,
 }
+assert_eq!(std::mem::size_of::<AtomicPoint>(), 4);
+assert_eq!(std::mem::align_of::<AtomicPoint>(), 4);
+
 pub struct SemiAtomicRect
 {
     pub min :       AtomicPoint,
@@ -223,20 +234,26 @@ impl Default for RangedVal
 }
 impl AtomicPoint
 {
-    pub fn set(&self, val : (u16, u16))
+    ///`val`- (x,y)
+    pub fn set(&self, x : u16, y : u16)
     {
         unsafe {
-            self.atomic
-                .store(AtomicPoint { split : val }.simple, Ordering::Relaxed);
+            self.atomic.store(
+                AtomicPoint {
+                    point : Point { x : x, y : y },
+                }
+                .simple,
+                Ordering::Relaxed,
+            );
         }
     }
-    pub fn get(&self) -> (u16, u16)
+    pub fn get(&self) -> Point<u16, u16>
     {
         unsafe {
             AtomicPoint {
                 simple : self.atomic.load(Ordering::Relaxed),
             }
-            .split
+            .point
         }
     }
 }
@@ -251,29 +268,25 @@ impl SemiAtomicRect
             changed :   AtomicBool::new(false),
         }
     }
-    pub fn set_min(&self, min : (u16, u16))
+    pub fn set_min(&self, x : u16, y : u16)
     {
-        let mut min = min;
+        let (mut x, mut y) = (x, y);
         let full = self.full_size.get();
-        min.0 = min.0.clamp(0, full.0 - 1);
-        min.1 = min.1.clamp(0, full.1 - 1);
+        x = x.clamp(0, full.x - 1);
+        y = y.clamp(0, full.y - 1);
         let max = self.max.get();
-        let minq = (u16::min(min.0, max.0), u16::min(min.1, max.1));
-        let maxq = (u16::max(min.0, max.0), u16::max(min.1, max.1));
-        self.min.set(minq);
-        self.max.set(maxq);
+        self.min.set(u16::min(x, max.x), u16::min(y, max.y));
+        self.max.set(u16::max(x, max.x), u16::max(y, max.y));
     }
-    pub fn set_max(&self, max : (u16, u16))
+    pub fn set_max(&self, x : u16, y : u16)
     {
-        let mut max = max;
+        let (mut x, mut y) = (x, y);
         let full = self.full_size.get();
-        max.0 = max.0.clamp(0, full.0 - 1);
-        max.1 = max.1.clamp(0, full.1 - 1);
+        x = x.clamp(0, full.x - 1);
+        y = y.clamp(0, full.y - 1);
         let min = self.min.get();
-        let minq = (u16::min(min.0, max.0), u16::min(min.1, max.1));
-        let maxq = (u16::max(min.0, max.0), u16::max(min.1, max.1));
-        self.min.set(minq);
-        self.max.set(maxq);
+        self.min.set(u16::min(x, min.x), u16::min(y, min.y));
+        self.max.set(u16::max(x, min.x), u16::max(y, min.y));
     }
     pub fn changed(&self, set : bool) -> bool { self.changed.swap(set, Ordering::Relaxed) }
 }

@@ -3,13 +3,8 @@ use num_complex::Complex64;
 use std::collections::HashMap;
 use std::f64::consts::PI;
 use strum_macros::{EnumString, EnumVariantNames};
-///(x,y)
-#[derive(Clone, PartialEq)]
-pub struct Point<T>
-{
-    pub x : isize,
-    pub y : T,
-}
+
+use crate::tt_common::*;
 // struct Param
 // {
 //     name :    String,
@@ -21,8 +16,8 @@ pub struct Point<T>
 #[derive(Clone, PartialEq)]
 pub struct PolyWiseWavelet
 {
-    pub dxpsi : [Point<[f64; 3]>; 2],
-    pub d3psi : Vec<Point<f64>>,
+    pub dxpsi : [Point<isize, [f64; 3]>; 2],
+    pub d3psi : Vec<Point<isize, f64>>,
 }
 impl PolyWiseWavelet
 {
@@ -127,7 +122,7 @@ impl PolyWiseWavelet
         //  (exept last x which evals to left-side val (x_last=> x_last-))
         let (x0f, xJf) = (*x.first().unwrap(), *x.last().unwrap());
         let (x0, xJ) = (x0f as isize, xJf as isize);
-        let mut d3psi_raw : Vec<Point<f64>> = x
+        let mut d3psi_raw : Vec<_> = x
             .iter()
             .map(|&x| {
                 Point {
