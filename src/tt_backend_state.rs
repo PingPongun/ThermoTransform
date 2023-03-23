@@ -314,21 +314,34 @@ impl TTStateBackend
         {
             match self.file.state.load(Ordering::Relaxed)
             {
-                FileState::None =>
+                FileState::None | FileState::Error =>
                 {
                     self.file.input_data = None;
+                    self.file.fourier = None;
                     self.file.lazy_cwt = None;
                     self.check_changed_and_sleep();
                 }
                 FileState::New =>
                 {
-                    //input file path changed
-                    let _ = self.file.state.compare_exchange(
-                        FileState::New,
-                        FileState::Loading,
-                        Ordering::SeqCst,
-                        Ordering::Acquire,
-                    );
+                    if let Some(_path) = self.file.path.read()
+                    {
+                        //input file path changed
+                        let _ = self.file.state.compare_exchange(
+                            FileState::New,
+                            FileState::Loading,
+                            Ordering::SeqCst,
+                            Ordering::Acquire,
+                        );
+                    }
+                    else
+                    {
+                        let _ = self.file.state.compare_exchange(
+                            FileState::New,
+                            FileState::None,
+                            Ordering::SeqCst,
+                            Ordering::Acquire,
+                        );
+                    }
                 }
                 FileState::Loading =>
                 {
@@ -338,32 +351,37 @@ impl TTStateBackend
                         exec_time.start();
                         self.file.input_data = TTInputData::new(path, self.file.state.clone());
                         exec_time.stop_print("file loading time");
+                        if let Some(input) = &self.file.input_data
+                        {
+                            //file loaded correctly
+                            self.file
+                                .frames
+                                .store(input.data.len_of(ndarray::Axis(0)), Ordering::Relaxed);
+                            let size = Point {
+                                x : input.data.shape()[2] as u16,
+                                y : input.data.shape()[1] as u16,
+                            };
+                            let min = Point {
+                                x : size.x / 8,
+                                y : size.y / 8,
+                            };
+                            self.settings.roi.min.set(min.x, min.y);
+                            self.settings.roi.max.set(min.x * 7, min.y * 7);
+                            self.settings.roi.full_size.set(size.x, size.y);
+
+                            let _ = self.file.state.compare_exchange(
+                                FileState::Loading,
+                                FileState::Loaded,
+                                Ordering::SeqCst,
+                                Ordering::Acquire,
+                            );
+                        }
                     }
                     else
                     {
-                        unreachable!()
-                    }
-                    if let Some(input) = &self.file.input_data
-                    {
-                        //file loaded correctly
-                        self.file
-                            .frames
-                            .store(input.data.len_of(ndarray::Axis(0)), Ordering::Relaxed);
-                        let size = Point {
-                            x : input.data.shape()[2] as u16,
-                            y : input.data.shape()[1] as u16,
-                        };
-                        let min = Point {
-                            x : size.x / 8,
-                            y : size.y / 8,
-                        };
-                        self.settings.roi.min.set(min.x, min.y);
-                        self.settings.roi.max.set(min.x * 7, min.y * 7);
-                        self.settings.roi.full_size.set(size.x, size.y);
-
                         let _ = self.file.state.compare_exchange(
-                            FileState::Loading,
-                            FileState::Loaded,
+                            FileState::New,
+                            FileState::None,
                             Ordering::SeqCst,
                             Ordering::Acquire,
                         );

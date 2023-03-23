@@ -1,5 +1,8 @@
-use crate::tt_gui_state::TTStateGUI;
+use std::ffi::OsString;
+use std::str::FromStr;
 
+use crate::tt_gui_state::TTStateGUI;
+use crate::tt_input_data::SUPPORTED_FILE_EXTENSIONS;
 pub struct ThermoTransformApp
 {
     pub backend : TTStateGUI,
@@ -67,16 +70,23 @@ impl eframe::App for ThermoTransformApp
                 // Collect dropped files:
                 if !ctx.input(|i| i.raw.dropped_files.is_empty())
                 {
-                    backend.set_file_path(Some(ctx.input(|i| {
-                        i.raw
-                            .dropped_files
-                            .last()
-                            .unwrap()
-                            .clone()
-                            .path
-                            .unwrap()
-                            .into()
-                    })));
+                    let file_path = ctx.input(|i| i.raw.dropped_files.last().unwrap().clone().path);
+                    match file_path
+                    {
+                        Some(path) =>
+                        {
+                            for &ext in SUPPORTED_FILE_EXTENSIONS
+                            {
+                                if path.extension()
+                                    == Some(OsString::from_str(ext).unwrap().as_os_str())
+                                {
+                                    backend.set_file_path(path.into());
+                                    break;
+                                }
+                            }
+                        }
+                        None => (),
+                    }
                 }
             }
             backend.show(ui);
@@ -93,13 +103,31 @@ fn preview_files_being_dropped(ctx : &egui::Context)
 
     if !ctx.input(|i| i.raw.hovered_files.is_empty())
     {
+        let mut background_color = Color32::from_black_alpha(192);
         let text = ctx.input(|i| {
             let mut text = "Dropping files:\n".to_owned();
             for file in &i.raw.hovered_files
             {
                 if let Some(path) = &file.path
                 {
-                    write!(text, "\n{}", path.display()).ok();
+                    let mut supported_ext = false;
+                    for &ext in SUPPORTED_FILE_EXTENSIONS
+                    {
+                        if path.extension() == Some(OsString::from_str(ext).unwrap().as_os_str())
+                        {
+                            supported_ext = true;
+                            break;
+                        }
+                    }
+                    if supported_ext
+                    {
+                        write!(text, "\n{}", path.display()).ok();
+                    }
+                    else
+                    {
+                        write!(text, "\n!!! {}: INVALID FILE FORMAT!!!", path.display()).ok();
+                        background_color = Color32::from_rgba_unmultiplied(255, 0, 0, 192);
+                    }
                 }
                 else if !file.mime.is_empty()
                 {
@@ -117,7 +145,7 @@ fn preview_files_being_dropped(ctx : &egui::Context)
             ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("file_drop_target")));
 
         let screen_rect = ctx.input(|i| i.screen_rect());
-        painter.rect_filled(screen_rect, 0.0, Color32::from_black_alpha(192));
+        painter.rect_filled(screen_rect, 0.0, background_color);
         painter.text(
             screen_rect.center(),
             Align2::CENTER_CENTER,

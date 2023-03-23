@@ -7,32 +7,29 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crate::tt_common::*;
+
+pub const SUPPORTED_FILE_EXTENSIONS : &[&str] = &["txt"];
 #[derive(PartialEq)]
 pub struct TTInputData
 {
-    pub data :    Array3<f64>,
-    pub min_val : f64,
-    pub max_val : f64,
+    pub data : Array3<f64>,
 }
 
 impl TTInputData
 {
     pub fn new(path : &OsString, file_state : Arc<AtomicFileState>) -> Option<Self>
     {
-        let mut min_val = f64::INFINITY;
-        let mut max_val = f64::NEG_INFINITY;
         let f : File = match File::open(path.clone())
         {
             Ok(it) => it,
             Err(_) =>
             {
+                file_state.store(FileState::Error, Ordering::SeqCst);
                 return None;
             }
         };
 
         let fr = BufReader::new(f);
-        // let mut file_content_string: String=String::new();
-        // f.read_to_string(&mut file_content_string).unwrap();
 
         let mut parsing_header : bool = false;
         let mut columns : usize = 0;
@@ -41,7 +38,6 @@ impl TTInputData
         let mut v_f64 : Vec<f64> = Vec::default();
 
         for line in fr.lines()
-        // for iline in file_content_string.lines()
         {
             if file_state.load(Ordering::Relaxed) != FileState::Loading
             {
@@ -76,9 +72,18 @@ impl TTInputData
                                     &mut v
                                         .iter()
                                         .map(|x| {
-                                            let x = x.replace(',', ".").parse::<f64>().unwrap();
-                                            min_val = min_val.min(x);
-                                            max_val = max_val.max(x);
+                                            let parse_result = x.replace(',', ".").parse::<f64>();
+                                            let x = match parse_result
+                                            {
+                                                Ok(val) => val,
+                                                Err(_) =>
+                                                {
+                                                    //structure of input file is not as expected(wrong file format), function finishes current line and returns faliure
+                                                    file_state
+                                                        .store(FileState::Error, Ordering::SeqCst);
+                                                    f64::NAN
+                                                }
+                                            };
                                             x
                                         })
                                         .collect(),
@@ -99,13 +104,33 @@ impl TTInputData
                 Err(_) => continue,
             };
         }
-        // let mul = 1.0 / (max_val - min_val);
-        // let add = -min_val * mul;
-        // v_f64 = v_f64.into_par_iter().map(|x| (x * mul + add)).collect();
-        Some(TTInputData {
-            data : Array::from_shape_vec((depths, rows, columns), v_f64).unwrap(),
-            min_val,
-            max_val,
-        })
+
+        if file_state.load(Ordering::Relaxed) != FileState::Loading
+        {
+            //file selection has been changed OR wrong file format, ongoing file reading is outdated/invalid
+            return None;
+        }
+        match Array::from_shape_vec((depths, rows, columns), v_f64)
+        {
+            Ok(data) =>
+            {
+                if data.shape().iter().fold(true, |acc, &dim| acc & (dim > 1))
+                {
+                    return Some(TTInputData { data : data });
+                }
+                else
+                {
+                    //invalid data dimensions-> wrong file format/empty file
+                    file_state.store(FileState::Error, Ordering::SeqCst);
+                    return None;
+                }
+            }
+            Err(_) =>
+            {
+                //wrong file format
+                file_state.store(FileState::Error, Ordering::SeqCst);
+                return None;
+            }
+        }
     }
 }

@@ -35,6 +35,7 @@ pub enum FileState
     ProcessingFourier,
     ProcessingWavelet,
     Ready,
+    Error,
 }
 #[derive(
     Clone, Copy, PartialEq, Debug, Default, strum_macros::AsRefStr, EnumString, EnumVariantNames,
