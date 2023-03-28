@@ -12,6 +12,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_extras",
+ "fast-float",
  "futures",
  "image",
  "lazy_static",
@@ -1060,6 +1061,11 @@ dependencies = [
  "smallvec",
  "zune-inflate",
 ]
+
+[[package]]
+name = "fast-float"
+version = "0.2.0"
+source = "git+https://github.com/PingPongun/fast-float-rust.git?branch=master#3eb7de2b87c8e8b2659608d20396294375b178dc"
 
 [[package]]
 name = "fastrand"
