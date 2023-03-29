@@ -7,13 +7,32 @@ use std::io::BufReader;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use crate::macros::array_pows_2_3;
 use crate::tt_common::*;
+
+const PRIMES : &'static [usize] = array_pows_2_3!();
+fn find_next_pows_2_3(val : usize) -> usize
+{
+    match PRIMES.binary_search(&val)
+    {
+        Ok(_idx) => val,
+        Err(idx) =>
+        {
+            debug_assert!(PRIMES[idx] > val);
+            debug_assert!(PRIMES[idx] < 2 * val);
+            PRIMES[idx]
+        }
+    }
+}
 
 pub const SUPPORTED_FILE_EXTENSIONS : &[&str] = &["txt"];
 #[derive(PartialEq)]
 pub struct TTInputData
 {
-    pub data : Array3<f64>,
+    pub frames : usize,
+    pub width :  usize,
+    pub height : usize,
+    pub data :   Array3<f64>,
 }
 
 impl TTInputData
@@ -34,6 +53,7 @@ impl TTInputData
         //prealocate vector that will store input data
         let mut v_f64 : Vec<f64>;
         let estimated_capacity;
+        let mut rounded_frames;
         if let Ok(meta) = f.metadata()
         {
             const FILE_HEADER_LEN : usize = 20;
@@ -45,11 +65,13 @@ impl TTInputData
             const IMAGE_DATA_LEN : usize = IMAGE_PIXELS * 6;
             const IMAGE_LEN : usize = IMAGE_DATA_LEN + IMAGE_TOP_HEADER_LEN + IMAGE_ROW_HEADER_LEN;
             let estimated_frames = (meta.len() as usize - FILE_HEADER_LEN) / IMAGE_LEN;
-            estimated_capacity = (estimated_frames + 1) * IMAGE_PIXELS;
+            rounded_frames = find_next_pows_2_3(estimated_frames);
+            estimated_capacity = (rounded_frames + 1) * IMAGE_PIXELS;
             v_f64 = Vec::with_capacity(estimated_capacity);
         }
         else
         {
+            rounded_frames = 0;
             estimated_capacity = 0;
             v_f64 = Vec::default();
         }
@@ -59,7 +81,7 @@ impl TTInputData
         let mut not_parsing_header : bool = true;
         let mut columns : usize = 0;
         let mut rows : usize = 0;
-        let mut depths : usize = 0;
+        let mut frames : usize = 0;
 
         //find correct localization/ Is decimal point ',' or '.' ?
         let ff_parser;
@@ -131,7 +153,7 @@ impl TTInputData
                                 not_parsing_header = true;
                                 columns = 0;
                                 rows = 0;
-                                depths += 1;
+                                frames += 1;
                             }
                         }
                         else
@@ -156,13 +178,26 @@ impl TTInputData
             //file selection has been changed OR wrong file format, ongoing file reading is outdated/invalid
             return None;
         }
-        match Array::from_shape_vec((depths, rows, columns), v_f64)
+        if rounded_frames > frames
+        {
+            v_f64.resize(rounded_frames * rows * columns, 0.0);
+        }
+        else
+        {
+            rounded_frames = frames;
+        }
+        match Array::from_shape_vec((rounded_frames, rows, columns), v_f64)
         {
             Ok(data) =>
             {
                 if data.shape().iter().fold(true, |acc, &dim| acc & (dim > 1))
                 {
-                    return Some(TTInputData { data : data });
+                    return Some(TTInputData {
+                        data : data,
+                        frames,
+                        width : columns,
+                        height : rows,
+                    });
                 }
                 else
                 {

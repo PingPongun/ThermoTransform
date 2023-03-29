@@ -1,0 +1,8 @@
+[package]
+name = "macros"
+version="0.1.0"
+
+[dependencies]
+[lib]
+proc-macro = true
+path="lib.rs"

@@ -32,6 +32,7 @@ ndrustfft = "0.4"
 static_assertions = "1.1"
 image="0.24"
 fast-float={git="https://github.com/PingPongun/fast-float-rust.git", branch = "master"}
+macros={path="macros/"}
 
 [patch.crates-io]
 ndarray={git="https://github.com/PingPongun/ndarray.git", branch = "master"}

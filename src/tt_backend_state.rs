@@ -354,12 +354,10 @@ impl TTStateBackend
                         if let Some(input) = &self.file.input_data
                         {
                             //file loaded correctly
-                            self.file
-                                .frames
-                                .store(input.data.len_of(ndarray::Axis(0)), Ordering::Relaxed);
+                            self.file.frames.store(input.frames, Ordering::Relaxed);
                             let size = Point {
-                                x : input.data.shape()[2] as u16,
-                                y : input.data.shape()[1] as u16,
+                                x : input.width as u16,
+                                y : input.height as u16,
                             };
                             let min = Point {
                                 x : size.x / 8,
@@ -410,8 +408,7 @@ impl TTStateBackend
                                 }
                             },
                             || {
-                                self.file.fourier =
-                                    TTFourier::new(&input.data, self.file.state.clone());
+                                self.file.fourier = TTFourier::new(&input, self.file.state.clone());
 
                                 if let Some(_) = &self.file.fourier
                                 {

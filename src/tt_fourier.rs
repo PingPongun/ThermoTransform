@@ -1,6 +1,7 @@
 use ndarray::Array2;
 use ndarray::Array3;
 use ndarray::Axis;
+use ndarray::Slice;
 use ndrustfft::ndfft_r2c_par;
 use ndrustfft::ndifft_r2c_par;
 use ndrustfft::R2cFftHandler;
@@ -10,6 +11,7 @@ use rayon::prelude::IndexedParallelIterator;
 use rayon::prelude::IntoParallelIterator;
 use rayon::prelude::IntoParallelRefIterator;
 use rayon::prelude::IntoParallelRefMutIterator;
+use rayon::prelude::ParallelBridge;
 use rayon::prelude::ParallelIterator;
 use std::f64::consts::PI;
 use std::mem;
@@ -18,20 +20,28 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crate::tt_common::*;
-
+use crate::tt_input_data::TTInputData;
 pub struct TTFourier
 {
-    data : Array3<Complex64>,
+    time_len :            usize,
+    time_len_wo_padding : usize,
+    data :                Array3<Complex64>,
 }
 #[derive(Clone)]
 struct TTFourierUninit
 {
-    data : Array3<MaybeUninit<Complex<f64>>>,
+    _time_len :            usize,
+    _time_len_wo_padding : usize,
+    data :                 Array3<MaybeUninit<Complex<f64>>>,
 }
 
 impl TTFourierUninit
 {
-    fn new<const N: usize>(shape : (usize, usize, usize)) -> [TTFourierUninit; N]
+    fn new<const N: usize>(
+        shape : (usize, usize, usize),
+        time_len : usize,
+        time_len_wo_padding : usize,
+    ) -> [TTFourierUninit; N]
     {
         // Create an uninitialized array of `MaybeUninit`. The `assume_init` is
         // safe because the type we are claiming to have initialized here is a
@@ -45,7 +55,9 @@ impl TTFourierUninit
         for elem in &mut uninit_data[..]
         {
             elem.write(TTFourierUninit {
-                data : Array3::uninit(shape),
+                data :                 Array3::uninit(shape),
+                _time_len :            time_len,
+                _time_len_wo_padding : time_len_wo_padding,
             });
         }
 
@@ -59,15 +71,18 @@ impl TTFourierUninit
 }
 impl TTFourier
 {
-    pub fn new(input : &Array3<f64>, file_state : Arc<AtomicFileState>) -> Option<TTFourier>
+    pub fn new(input : &TTInputData, file_state : Arc<AtomicFileState>) -> Option<TTFourier>
     {
-        let mut shape_raw = input.dim();
+        let mut shape_raw = input.data.dim();
         let mut fft_handler = R2cFftHandler::<f64>::new(shape_raw.0);
+        let time_len = shape_raw.0;
         shape_raw.0 = shape_raw.0 / 2 + 1;
         let mut fourier = TTFourier {
-            data : Array3::default(shape_raw),
+            data : Array3::zeros(shape_raw),
+            time_len,
+            time_len_wo_padding : input.frames,
         };
-        ndfft_r2c_par(input, &mut fourier.data, &mut fft_handler, 0);
+        ndfft_r2c_par(&input.data, &mut fourier.data, &mut fft_handler, 0);
 
         if FileState::ProcessingFourier == file_state.load(Ordering::Relaxed)
         {
@@ -108,7 +123,8 @@ impl TTFourier
         // X_k*(-w*i)^4         ->  w4*X_k_r + i*w4*X_k_i
         let shape = self.data.dim();
 
-        let mut uninit_data : [TTFourierUninit; N] = TTFourierUninit::new(shape);
+        let mut uninit_data : [TTFourierUninit; N] =
+            TTFourierUninit::new(shape, self.time_len, self.time_len_wo_padding);
         let w_coeff_base = (0..shape.0)
             .map(|x| 1.0 / (2.0 * x as f64 * PI))
             .collect::<Vec<_>>();
@@ -118,6 +134,7 @@ impl TTFourier
             .iter_mut()
             .enumerate()
             .step_by(2)
+            .par_bridge()
             .for_each(|(idx, x)| {
                 x.data
                     .axis_iter_mut(Axis(0))
@@ -142,6 +159,7 @@ impl TTFourier
             .enumerate()
             .skip(1)
             .step_by(2)
+            .par_bridge()
             .for_each(|(idx, x)| {
                 x.data
                     .axis_iter_mut(Axis(0))
@@ -175,10 +193,11 @@ impl TTFourier
     pub fn inverse_transform(&self) -> Array3<f64>
     {
         let mut shape = self.data.dim();
-        shape.0 = (shape.0 - 1) * 2;
+        shape.0 = self.time_len;
         let mut handler = R2cFftHandler::<f64>::new(shape.0);
-        let mut output = Array3::default(shape);
+        let mut output = Array3::zeros(shape);
         ndifft_r2c_par(&self.data, &mut output, &mut handler, 0);
+        output.slice_axis_inplace(Axis(0), Slice::from(..self.time_len_wo_padding));
         output
     }
 
