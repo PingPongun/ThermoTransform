@@ -1,9 +1,13 @@
+use binrw::*;
 use fast_float::FastFloatParser;
-use ndarray::{Array, Array3};
+use ndarray::{Array, Array3, ArrayBase, Dimension, Ix3, OwnedRepr};
+use ndarray::{Data, Dim};
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
+use std::mem::{self, transmute};
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -25,14 +29,149 @@ fn find_next_pows_2_3(val : usize) -> usize
     }
 }
 
-pub const SUPPORTED_FILE_EXTENSIONS : &[&str] = &["txt"];
+pub const SUPPORTED_FILE_EXTENSIONS : &[&str] = &["txt", "ttcf"];
+
+pub struct ArrayBaseW<S, D>(ArrayBase<S, D>)
+where
+    D : Dimension,
+    S : Data,
+    S::Elem : PartialEq;
+impl<A, S, D> Deref for ArrayBaseW<S, D>
+where
+    S : Data<Elem = A>,
+    A : PartialEq,
+    D : Dimension,
+{
+    type Target = ArrayBase<S, D>;
+
+    #[inline]
+    fn deref<'a>(&'a self) -> &Self::Target
+    {
+        let ptr = self as *const _ as *const Self::Target;
+        unsafe { transmute::<_, &'a _>(&*ptr) } //TODO CHECK forget(self)
+    }
+}
+impl<A, S, D> DerefMut for ArrayBaseW<S, D>
+where
+    S : Data<Elem = A>,
+    A : PartialEq,
+    D : Dimension,
+{
+    #[inline]
+    fn deref_mut<'a>(&'a mut self) -> &mut Self::Target
+    {
+        let ptr = self as *mut _ as *mut Self::Target;
+        unsafe { transmute::<_, &'a mut _>(&mut *ptr) } //TODO CHECK forget(self)
+    }
+}
+impl<A, S, D> From<ArrayBase<S, D>> for ArrayBaseW<S, D>
+where
+    S : Data<Elem = A>,
+    A : PartialEq,
+    D : Dimension,
+{
+    #[inline]
+    fn from(mut value : ArrayBase<S, D>) -> Self
+    {
+        let ptr = &mut value as *mut _ as *mut Self;
+        let res = unsafe { ptr.read() };
+        mem::forget(value);
+        res
+    }
+}
+impl<A, B, S, S2, D> PartialEq<ArrayBaseW<S2, D>> for ArrayBaseW<S, D>
+where
+    A : PartialEq<B> + PartialEq<A>,
+    B : PartialEq<B>,
+    S : Data<Elem = A>,
+    S2 : Data<Elem = B>,
+    D : Dimension,
+    ArrayBase<S2, D> : PartialEq<ArrayBase<S, D>>,
+{
+    #[inline]
+    fn eq(&self, rhs : &ArrayBaseW<S2, D>) -> bool { **self == **rhs }
+}
+
+pub type Array3W<T> = ArrayBaseW<OwnedRepr<T>, Ix3>;
+
+impl<T> BinRead for Array3W<T>
+where T : Default + for<'a> binrw::BinRead<Args<'a> = ()> + 'static + PartialEq
+{
+    type Args<'a> = ();
+
+    fn read_options<R : Read + Seek>(
+        reader : &mut R,
+        endian : Endian,
+        _args : Self::Args<'_>,
+    ) -> BinResult<Self>
+    {
+        let dim : (u32, u32, u32) = <_>::read_options(reader, endian, ())?;
+        let dim = Dim((dim.0 as usize, dim.1 as usize, dim.2 as usize));
+        let vec : Vec<T>;
+        if endian == Endian::Little && cfg!(target_endian = "big")
+        {
+            //if endian is not native endianess
+            vec = <_>::read_options(
+                reader,
+                endian,
+                VecArgs {
+                    count : dim.size(),
+                    inner : (),
+                },
+            )?;
+        }
+        else
+        {
+            let vec_u8 : Vec<u8> = <_>::read_options(
+                reader,
+                endian,
+                VecArgs {
+                    count : dim.size() * mem::size_of::<T>(),
+                    inner : (),
+                },
+            )?;
+            vec = unsafe { transmute(vec_u8) };
+        }
+        let ret = unsafe { Ok(Array3::from_shape_vec_unchecked(dim, vec).into()) };
+
+        ret
+    }
+}
+impl<T> BinWrite for Array3W<T>
+where T : Default + for<'a> binrw::BinWrite<Args<'a> = ()> + 'static + PartialEq
+{
+    type Args<'a> = ();
+
+    fn write_options<W : Write + Seek>(
+        &self,
+        writer : &mut W,
+        endian : Endian,
+        _args : Self::Args<'_>,
+    ) -> BinResult<()>
+    {
+        (
+            self.dim().0 as u32,
+            self.dim().1 as u32,
+            self.dim().2 as u32,
+        )
+            .write_options(writer, endian, ())?;
+        self.as_slice_memory_order()
+            .unwrap()
+            .write_options(writer, endian, ())?;
+        Ok(())
+    }
+}
+
+#[binrw]
 #[derive(PartialEq)]
 pub struct TTInputData
 {
-    pub frames : usize,
-    pub width :  usize,
-    pub height : usize,
-    pub data :   Array3<f64>,
+    pub frames : u32,
+    pub width :  u32,
+    pub height : u32,
+    #[br(map = |x: Array3W<u32>| ArrayBaseW(x.map(|&x| f32::from_bits(x) as f64)))]
+    #[bw(map = |x: &Array3W<f64>| ArrayBaseW(x.map(|&x| (x as f32).to_bits())))]
+    pub data :   Array3W<f64>,
 }
 
 impl TTInputData
@@ -193,10 +332,10 @@ impl TTInputData
                 if data.shape().iter().fold(true, |acc, &dim| acc & (dim > 1))
                 {
                     return Some(TTInputData {
-                        data : data,
-                        frames,
-                        width : columns,
-                        height : rows,
+                        data :   data.into(),
+                        frames : frames as u32,
+                        width :  columns as u32,
+                        height : rows as u32,
                     });
                 }
                 else

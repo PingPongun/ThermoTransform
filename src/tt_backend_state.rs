@@ -1,3 +1,5 @@
+use binrw::io::{BufReader, NoSeek};
+use binrw::*;
 use egui::{ColorImage, TextureOptions};
 use ndarray::{s, ArrayView2, Axis};
 use ndarray_ndimage::{convolve, BorderMode};
@@ -5,11 +7,15 @@ use parking_lot::{Condvar, Mutex};
 use rayon::prelude::{IntoParallelIterator, ParallelExtend, ParallelIterator};
 use rayon::slice::ParallelSliceMut;
 use std::f64::consts::{FRAC_1_PI, PI};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
+use std::fs::{remove_file, File};
+use std::io::BufWriter;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use triple_buffer as tribuf;
 use triple_buffer::triple_buffer;
+use zstd;
 
 use crate::cwt::*;
 use crate::tt_common::*;
@@ -27,14 +33,22 @@ pub struct TTViewBackend
     pub params :     tribuf::Output<TTViewParams>,
     pub settings :   Arc<GlobalSettings>,
 }
+#[binrw]
+#[derive(Default)]
+struct TTFileBackendData
+{
+    input_data : Option<TTInputData>,
+    #[brw(ignore)]
+    lazy_cwt :   Option<TTLazyCWT>,
+    #[brw(ignore)]
+    fourier :    Option<TTFourier>,
+}
 struct TTFileBackend
 {
-    frames :     Arc<AtomicUsize>,
-    state :      Arc<AtomicFileState>,
-    path :       tribuf::Output<Option<OsString>>,
-    input_data : Option<TTInputData>,
-    lazy_cwt :   Option<TTLazyCWT>,
-    fourier :    Option<TTFourier>,
+    frames : Arc<AtomicUsize>,
+    state :  Arc<AtomicFileState>,
+    path :   tribuf::Output<Option<OsString>>,
+    data :   TTFileBackendData,
 }
 
 pub struct TTStateBackend
@@ -268,9 +282,7 @@ impl TTFileBackend
             frames,
             state,
             path,
-            input_data : None,
-            lazy_cwt : None,
-            fourier : None,
+            data : Default::default(),
         }
     }
 }
@@ -316,9 +328,7 @@ impl TTStateBackend
             {
                 FileState::None | FileState::Error =>
                 {
-                    self.file.input_data = None;
-                    self.file.fourier = None;
-                    self.file.lazy_cwt = None;
+                    self.file.data = Default::default();
                     self.check_changed_and_sleep();
                 }
                 FileState::New =>
@@ -345,16 +355,54 @@ impl TTStateBackend
                 }
                 FileState::Loading =>
                 {
-                    self.file.lazy_cwt = None;
+                    self.file.data.lazy_cwt = None;
+                    self.file.data.fourier = None;
                     if let Some(path) = self.file.path.read()
                     {
                         exec_time.start();
-                        self.file.input_data = TTInputData::new(path, self.file.state.clone());
+                        if PathBuf::from(path).extension() == Some(OsStr::new("ttcf"))
+                        {
+                            if let Ok(f) = File::open(path)
+                            {
+                                if let Ok(decoder) = zstd::Decoder::new(f)
+                                {
+                                    self.file.data.input_data = Option::<TTInputData>::read_le(
+                                        &mut NoSeek::new(BufReader::new(decoder)),
+                                    )
+                                    .unwrap_or(None);
+                                    if self.file.data.input_data == None
+                                    {
+                                        let _ = self.file.state.compare_exchange(
+                                            FileState::Loading,
+                                            FileState::Error,
+                                            Ordering::SeqCst,
+                                            Ordering::Acquire,
+                                        );
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                let _ = self.file.state.compare_exchange(
+                                    FileState::Loading,
+                                    FileState::Error,
+                                    Ordering::SeqCst,
+                                    Ordering::Acquire,
+                                );
+                            }
+                        }
+                        else
+                        {
+                            self.file.data.input_data =
+                                TTInputData::new(path, self.file.state.clone());
+                        }
                         exec_time.stop_print("file loading time");
-                        if let Some(input) = &self.file.input_data
+                        if let Some(input) = &self.file.data.input_data
                         {
                             //file loaded correctly
-                            self.file.frames.store(input.frames, Ordering::Relaxed);
+                            self.file
+                                .frames
+                                .store(input.frames as usize, Ordering::Relaxed);
                             let size = Point {
                                 x : input.width as u16,
                                 y : input.height as u16,
@@ -390,10 +438,10 @@ impl TTStateBackend
                     {}
                 FileState::ProcessingFourier =>
                 {
-                    if let Some(input) = &self.file.input_data
+                    if let Some(input) = &self.file.data.input_data
                     {
                         exec_time.start();
-                        self.file.fourier = None;
+                        self.file.data.fourier = None;
                         rayon::join(
                             || {
                                 //continously update time views if necessary
@@ -403,14 +451,15 @@ impl TTStateBackend
                                 {
                                     for view in &mut self.views
                                     {
-                                        view.time_view_check_update(&self.file.input_data);
+                                        view.time_view_check_update(&self.file.data.input_data);
                                     }
                                 }
                             },
                             || {
-                                self.file.fourier = TTFourier::new(&input, self.file.state.clone());
+                                self.file.data.fourier =
+                                    TTFourier::new(&input, self.file.state.clone());
 
-                                if let Some(_) = &self.file.fourier
+                                if let Some(_) = &self.file.data.fourier
                                 {
                                     //file processed correctly
                                     let _ = self.file.state.compare_exchange(
@@ -431,10 +480,9 @@ impl TTStateBackend
                 }
                 FileState::ProcessingWavelet =>
                 {
-                    if let Some(fourier) = &self.file.fourier
+                    if let Some(fourier) = &self.file.data.fourier
                     {
                         exec_time.start();
-                        self.file.lazy_cwt = None;
                         rayon::join(
                             || {
                                 //continously update time views if necessary
@@ -444,21 +492,21 @@ impl TTStateBackend
                                 {
                                     for view in &mut self.views
                                     {
-                                        view.time_view_check_update(&self.file.input_data);
-                                        view.fourier_view_check_update(&self.file.fourier);
+                                        view.time_view_check_update(&self.file.data.input_data);
+                                        view.fourier_view_check_update(&self.file.data.fourier);
                                     }
                                 }
                             },
                             || {
-                                self.file.lazy_cwt =
+                                self.file.data.lazy_cwt =
                                     TTLazyCWT::new(&fourier, self.file.state.clone());
 
-                                if let Some(_) = &self.file.lazy_cwt
+                                if let Some(_) = &self.file.data.lazy_cwt
                                 {
                                     //file processed correctly
                                     let _ = self.file.state.compare_exchange(
                                         FileState::ProcessingWavelet,
-                                        FileState::Ready,
+                                        FileState::ReadySaving,
                                         Ordering::SeqCst,
                                         Ordering::Acquire,
                                     );
@@ -472,13 +520,76 @@ impl TTStateBackend
                         unreachable!()
                     }
                 }
+                FileState::ReadySaving =>
+                {
+                    exec_time.start();
+                    rayon::join(
+                        || {
+                            //continously update time views if necessary
+                            while FileState::ReadySaving == self.file.state.load(Ordering::Relaxed)
+                                && self.stop_flag.load(Ordering::Relaxed) == false
+                            {
+                                for view in &mut self.views
+                                {
+                                    view.time_view_check_update(&self.file.data.input_data);
+                                    view.wavelet_view_check_update(
+                                        &self.file.data.lazy_cwt,
+                                        &mut self.wavelet_bank,
+                                    );
+                                    view.fourier_view_check_update(&self.file.data.fourier);
+                                }
+                            }
+                        },
+                        || {
+                            if let Some(path) = self.file.path.read()
+                            {
+                                let mut file_name = PathBuf::from(path);
+                                if file_name.extension() != Some(OsStr::new("ttcf"))
+                                {
+                                    file_name.set_extension("ttcf");
+                                    if let Ok(f) = File::create(file_name)
+                                    {
+                                        let fr = BufWriter::new(f);
+                                        let mut encoder = zstd::Encoder::new(fr, 8).unwrap();
+                                        let _ = encoder.include_checksum(true);
+                                        let _ = encoder
+                                            .multithread(num_cpus::get().saturating_sub(2) as u32);
+                                        let encoder = encoder.auto_finish();
+
+                                        let mut encoder_buffered =
+                                            NoSeek::new(BufWriter::new(encoder));
+                                        if let Ok(_) = self
+                                            .file
+                                            .data
+                                            .input_data
+                                            .write_le(&mut encoder_buffered)
+                                        {
+                                            let _ = remove_file(path);
+                                        }
+                                    }
+                                    exec_time.stop_print("saving to file");
+                                }
+                                //file processed correctly
+                                let _ = self.file.state.compare_exchange(
+                                    FileState::ReadySaving,
+                                    FileState::Ready,
+                                    Ordering::SeqCst,
+                                    Ordering::Acquire,
+                                );
+                            }
+                        },
+                    );
+                }
                 FileState::Ready =>
                 {
                     for view in &mut self.views
                     {
-                        view.time_view_check_update(&self.file.input_data);
-                        view.wavelet_view_check_update(&self.file.lazy_cwt, &mut self.wavelet_bank);
-                        view.fourier_view_check_update(&self.file.fourier);
+                        view.time_view_check_update(&self.file.data.input_data);
+                        view.wavelet_view_check_update(
+                            &self.file.data.lazy_cwt,
+                            &mut self.wavelet_bank,
+                        );
+                        view.fourier_view_check_update(&self.file.data.fourier);
                     }
                     self.check_changed_and_sleep();
                 }

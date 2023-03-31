@@ -540,6 +540,12 @@ impl TTStateGUI
                 {
                     (None, _) => (),
                     (_, FileState::None) => (),
+                    (Some(path), FileState::ReadySaving) =>
+                    {
+                        ui.label(path.to_string_lossy());
+                        ui.label(" Saving...");
+                        ui.spinner();
+                    }
                     (Some(path), FileState::Ready) =>
                     {
                         ui.label(path.to_string_lossy());

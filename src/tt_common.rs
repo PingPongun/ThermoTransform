@@ -34,6 +34,7 @@ pub enum FileState
     Loaded,
     ProcessingFourier,
     ProcessingWavelet,
+    ReadySaving,
     Ready,
     Error,
 }
@@ -151,9 +152,10 @@ pub use TTViewParams::*;
 
 pub struct ExecutionTimeMeas
 {
-    last_time : Instant,
+    last_time :       Instant,
+    last_print_time : Duration,
     #[cfg(feature = "time_meas")]
-    writer :    BufWriter<File>,
+    writer :          BufWriter<File>,
 }
 
 //=======================================
@@ -511,6 +513,7 @@ impl ExecutionTimeMeas
 
             #[cfg(feature = "time_meas")]
             writer :                               BufWriter::new(f),
+            last_print_time :                      Duration::new(0, 0),
         }
     }
     pub fn start(&mut self) { self.last_time = Instant::now(); }
@@ -519,9 +522,14 @@ impl ExecutionTimeMeas
         let duration = self.stop();
         #[cfg(feature = "time_meas")]
         {
-            let _ = write!(self.writer, "{}: {:?}\n", _text, duration);
+            let _ = write!(
+                self.writer,
+                "{}: {:?}; last print time:{:?}\n",
+                _text, duration, self.last_print_time
+            );
             let _ = self.writer.flush();
         }
+        self.last_print_time = self.stop();
         duration
     }
     pub fn stop(&mut self) -> Duration

@@ -23,15 +23,15 @@ use crate::tt_common::*;
 use crate::tt_input_data::TTInputData;
 pub struct TTFourier
 {
-    time_len :            usize,
-    time_len_wo_padding : usize,
+    time_len :            u32,
+    time_len_wo_padding : u32,
     data :                Array3<Complex64>,
 }
 #[derive(Clone)]
 struct TTFourierUninit
 {
-    _time_len :            usize,
-    _time_len_wo_padding : usize,
+    _time_len :            u32,
+    _time_len_wo_padding : u32,
     data :                 Array3<MaybeUninit<Complex<f64>>>,
 }
 
@@ -39,8 +39,8 @@ impl TTFourierUninit
 {
     fn new<const N: usize>(
         shape : (usize, usize, usize),
-        time_len : usize,
-        time_len_wo_padding : usize,
+        time_len : u32,
+        time_len_wo_padding : u32,
     ) -> [TTFourierUninit; N]
     {
         // Create an uninitialized array of `MaybeUninit`. The `assume_init` is
@@ -75,7 +75,7 @@ impl TTFourier
     {
         let mut shape_raw = input.data.dim();
         let mut fft_handler = R2cFftHandler::<f64>::new(shape_raw.0);
-        let time_len = shape_raw.0;
+        let time_len = shape_raw.0 as u32;
         shape_raw.0 = shape_raw.0 / 2 + 1;
         let mut fourier = TTFourier {
             data : Array3::zeros(shape_raw),
@@ -193,11 +193,11 @@ impl TTFourier
     pub fn inverse_transform(&self) -> Array3<f64>
     {
         let mut shape = self.data.dim();
-        shape.0 = self.time_len;
+        shape.0 = self.time_len as usize;
         let mut handler = R2cFftHandler::<f64>::new(shape.0);
         let mut output = Array3::zeros(shape);
         ndifft_r2c_par(&self.data, &mut output, &mut handler, 0);
-        output.slice_axis_inplace(Axis(0), Slice::from(..self.time_len_wo_padding));
+        output.slice_axis_inplace(Axis(0), Slice::from(..self.time_len_wo_padding as usize));
         output
     }
 
