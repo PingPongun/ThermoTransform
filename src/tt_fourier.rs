@@ -143,7 +143,8 @@ impl TTFourier
                     .zip(w_coeff_base.par_iter())
                     .for_each(|((mut oarray, iarray), w)| {
                         //* ((1 - (idx & 0x2) as isize) as f64) == -1 when idx= 3,7,11,.. ; == 1 when idx= 1,5,9,..
-                        let w = w.powi(idx as i32) * ((1 - (idx & 0x2) as isize) as f64);
+                        let w =
+                            w.powi((idx + 1) as i32) * ((1 - ((idx + 1) & 0x2) as isize) as f64);
                         let w = (w, -w);
                         oarray.zip_mut_with(&iarray, |o, i| {
                             o.write(Complex64 {
@@ -168,7 +169,8 @@ impl TTFourier
                     .zip(w_coeff_base.par_iter())
                     .for_each(|((mut oarray, iarray), w)| {
                         //* ((1 - (idx & 0x2) as isize) as f64) == -1 when idx= 2,6,10,.. ; == 1 when idx= 4,8,12,..
-                        let w = w.powi(idx as i32) * ((1 - (idx & 0x2) as isize) as f64);
+                        let w =
+                            w.powi((idx + 1) as i32) * ((1 - ((idx + 1) & 0x2) as isize) as f64);
                         oarray.zip_mut_with(&iarray, |o, i| {
                             o.write(Complex64 {
                                 re : w * i.re,
