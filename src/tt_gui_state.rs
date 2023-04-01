@@ -437,6 +437,7 @@ impl TTViewGUI
                             let (changed, rsp) = gram.show(ui, &self.settings);
                             retval |= changed;
                             ui.put(rsp.response.rect, Spinner::default());
+                            ui.ctx().request_repaint(); //faster next screen refresh, when waiting for new view
                         }
                         TTViewState::Invalid => (),
                     }
@@ -675,6 +676,7 @@ impl TTStateGUI
                 });
             if changed
             {
+                ui.ctx().request_repaint(); //speed up next screen refresh
                 if self.settings.changed(false)
                 {
                     //if roi has changed refresh all views

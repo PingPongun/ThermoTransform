@@ -1,6 +1,6 @@
 [package]
 name = "ThermoTransform"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Dawid Lentka <dawid.lentka@outlook.com>"]
 edition = "2021"
 build = "build.rs"

@@ -13,5 +13,3 @@
 - flexible windowing/views [?ULP]
 - persistent app settings [ULP]
 - hints & help [ULP]
-- perf. optimization [ULP]
-  - faster gui refresh after param changes
