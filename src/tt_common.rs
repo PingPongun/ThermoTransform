@@ -38,6 +38,16 @@ pub enum FileState
     Ready,
     Error,
 }
+
+pub mod Axis
+{
+    #![allow(dead_code)]
+    pub const TIME : ndarray::Axis = ndarray::Axis(2);
+    pub const HEIGHT : ndarray::Axis = ndarray::Axis(1);
+    pub const WIDTH : ndarray::Axis = ndarray::Axis(0);
+    pub const S_HEIGHT : ndarray::Axis = ndarray::Axis(1);
+    pub const S_WIDTH : ndarray::Axis = ndarray::Axis(0);
+}
 #[derive(
     Clone, Copy, PartialEq, Debug, Default, strum_macros::AsRefStr, EnumString, EnumVariantNames,
 )]

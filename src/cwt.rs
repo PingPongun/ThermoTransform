@@ -1,6 +1,5 @@
 use ndarray::Array2;
 use ndarray::Array3;
-use ndarray::Axis;
 use rayon::prelude::IndexedParallelIterator;
 use rayon::prelude::IntoParallelIterator;
 use rayon::prelude::ParallelIterator;
@@ -39,12 +38,12 @@ impl TTLazyCWT
         let shape = self.integrals[0].dim();
         let t = params.time.val as isize;
         let v = self.integrals[0]
-            .lanes(Axis(0))
+            .lanes(Axis::TIME)
             .into_iter()
             .into_par_iter()
-            .zip(self.integrals[1].lanes(Axis(0)).into_iter())
-            .zip(self.integrals[2].lanes(Axis(0)).into_iter())
-            .zip(self.integrals[3].lanes(Axis(0)).into_iter())
+            .zip(self.integrals[1].lanes(Axis::TIME).into_iter())
+            .zip(self.integrals[2].lanes(Axis::TIME).into_iter())
+            .zip(self.integrals[3].lanes(Axis::TIME).into_iter())
             .map(|integrals| {
                 let integrals = (
                     integrals.0 .0 .0,
@@ -140,6 +139,6 @@ impl TTLazyCWT
                 }
             })
             .collect();
-        Array2::from_shape_vec((shape.1, shape.2), v).unwrap()
+        Array2::from_shape_vec((shape.0, shape.1), v).unwrap()
     }
 }

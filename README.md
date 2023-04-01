@@ -14,5 +14,4 @@
 - persistent app settings [ULP]
 - hints & help [ULP]
 - perf. optimization [ULP]
-  - faster fft(signal extension to len=2^k*3^n) (->cwt integration & fourier)
   - faster gui refresh after param changes

@@ -1,6 +1,6 @@
 use binrw::*;
 use fast_float::FastFloatParser;
-use ndarray::{Array, Array3, ArrayBase, Dimension, Ix3, OwnedRepr};
+use ndarray::{Array, Array3, ArrayBase, Dimension, Ix3, OwnedRepr, Zip};
 use ndarray::{Data, Dim};
 use std::ffi::OsString;
 use std::fs::File;
@@ -178,6 +178,8 @@ impl TTInputData
 {
     pub fn new(path : &OsString, file_state : Arc<AtomicFileState>) -> Option<Self>
     {
+        // let mut exec_time = ExecutionTimeMeas::new("exec_time_input.txt");
+        // exec_time.start();
         //open file
         let f : File = match File::open(path.clone())
         {
@@ -188,6 +190,8 @@ impl TTInputData
                 return None;
             }
         };
+        // exec_time.stop_print("open file");
+        // exec_time.start();
 
         //prealocate vector that will store input data
         let mut v_f64 : Vec<f64>;
@@ -205,6 +209,9 @@ impl TTInputData
             const IMAGE_LEN : usize = IMAGE_DATA_LEN + IMAGE_TOP_HEADER_LEN + IMAGE_ROW_HEADER_LEN;
             let estimated_frames = (meta.len() as usize - FILE_HEADER_LEN) / IMAGE_LEN;
             rounded_frames = find_next_pows_2_3(estimated_frames);
+            // exec_time.stop_print("pows_2_3 find");
+            // exec_time.start();
+
             estimated_capacity = (rounded_frames + 1) * IMAGE_PIXELS;
             v_f64 = Vec::with_capacity(estimated_capacity);
         }
@@ -214,6 +221,8 @@ impl TTInputData
             estimated_capacity = 0;
             v_f64 = Vec::default();
         }
+        // exec_time.stop_print("buffer alloc");
+        // exec_time.start();
 
         let mut fr = BufReader::new(f);
 
@@ -241,6 +250,8 @@ impl TTInputData
             file_state.store(FileState::Error, Ordering::SeqCst);
             return None;
         }
+        // exec_time.stop_print("localisation find");
+        // exec_time.start();
 
         //iter file and parse it float vec
         for line in fr.lines()
@@ -309,6 +320,8 @@ impl TTInputData
                 Err(_) => continue,
             };
         }
+        // exec_time.stop_print("file loaded");
+        // exec_time.start();
 
         //checks if parsing was valid(valid file & file has not changed)
         debug_assert!((v_f64.capacity() == estimated_capacity) || (0 == estimated_capacity));
@@ -320,6 +333,8 @@ impl TTInputData
         if rounded_frames > frames
         {
             v_f64.resize(rounded_frames * rows * columns, 0.0);
+            // exec_time.stop_print("buffer resize");
+            // exec_time.start();
         }
         else
         {
@@ -329,14 +344,32 @@ impl TTInputData
         {
             Ok(data) =>
             {
+                // exec_time.stop_print("create array");
+                // exec_time.start();
                 if data.shape().iter().fold(true, |acc, &dim| acc & (dim > 1))
                 {
-                    return Some(TTInputData {
-                        data :   data.into(),
+                    //transpose/reverse axes to provide continous memory for across-time slices(faster ndfft)
+                    let mut data_transposed_uninit =
+                        Array::uninit((data.dim().2, data.dim().1, data.dim().0));
+                    Zip::from(&data.reversed_axes())
+                        .and(&mut data_transposed_uninit)
+                        .par_for_each(|i, o| {
+                            o.write(*i);
+                        });
+                    // exec_time.stop_print("reverse axes");
+                    // exec_time.start();
+                    let data_transposed = unsafe {
+                        // we can now promise we have fully initialized `data_transposed`.
+                        data_transposed_uninit.assume_init()
+                    };
+                    let ret = Some(TTInputData {
+                        data :   data_transposed.into(),
                         frames : frames as u32,
                         width :  columns as u32,
                         height : rows as u32,
                     });
+                    // exec_time.stop_print("end");
+                    return ret;
                 }
                 else
                 {

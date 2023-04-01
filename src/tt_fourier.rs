@@ -1,6 +1,5 @@
 use ndarray::Array2;
 use ndarray::Array3;
-use ndarray::Axis;
 use ndarray::Slice;
 use ndrustfft::ndfft_r2c_par;
 use ndrustfft::ndifft_r2c_par;
@@ -9,7 +8,6 @@ use num_complex::Complex;
 use num_complex::Complex64;
 use rayon::prelude::IndexedParallelIterator;
 use rayon::prelude::IntoParallelIterator;
-use rayon::prelude::IntoParallelRefIterator;
 use rayon::prelude::IntoParallelRefMutIterator;
 use rayon::prelude::ParallelBridge;
 use rayon::prelude::ParallelIterator;
@@ -74,15 +72,15 @@ impl TTFourier
     pub fn new(input : &TTInputData, file_state : Arc<AtomicFileState>) -> Option<TTFourier>
     {
         let mut shape_raw = input.data.dim();
-        let mut fft_handler = R2cFftHandler::<f64>::new(shape_raw.0);
-        let time_len = shape_raw.0 as u32;
-        shape_raw.0 = shape_raw.0 / 2 + 1;
+        let mut fft_handler = R2cFftHandler::<f64>::new(shape_raw.2);
+        let time_len = shape_raw.2 as u32;
+        shape_raw.2 = shape_raw.2 / 2 + 1;
         let mut fourier = TTFourier {
             data : Array3::zeros(shape_raw),
             time_len,
             time_len_wo_padding : input.frames,
         };
-        ndfft_r2c_par(&input.data, &mut fourier.data, &mut fft_handler, 0);
+        ndfft_r2c_par(&input.data, &mut fourier.data, &mut fft_handler, 2);
 
         if FileState::ProcessingFourier == file_state.load(Ordering::Relaxed)
         {
@@ -96,7 +94,7 @@ impl TTFourier
 
     pub fn snapshot(&self, params : &FourierViewParams) -> Array2<f64>
     {
-        let freq_view = self.data.index_axis(Axis(0), params.freq.val);
+        let freq_view = self.data.index_axis(Axis::TIME, params.freq.val);
         //convert to requested format
         match params.display_mode
         {
@@ -121,90 +119,147 @@ impl TTFourier
         // X_k*(-w*i)^2         -> -w2*X_k_r - i*w2*X_k_i
         // X_k*(-w*i)^3         -> -w3*X_k_i + i*w3*X_k_r
         // X_k*(-w*i)^4         ->  w4*X_k_r + i*w4*X_k_i
+        // let mut exec_time = ExecutionTimeMeas::new("exec_time_fourier_init.txt");
+        // exec_time.start();
         let shape = self.data.dim();
 
         let mut uninit_data : [TTFourierUninit; N] =
             TTFourierUninit::new(shape, self.time_len, self.time_len_wo_padding);
-        let w_coeff_base = (0..shape.0)
+        // exec_time.stop_print("uninit");
+        // exec_time.start();
+
+        let w_coeff_base = (0..shape.2)
             .map(|x| 1.0 / (2.0 * x as f64 * PI))
             .collect::<Vec<_>>();
+        let w_coeffs_odd = (1..=N)
+            .into_iter()
+            .step_by(2)
+            .map(|idx| {
+                w_coeff_base
+                    .iter()
+                    .map(move |w| {
+                        //* ((1 - (idx & 0x2) as isize) as f64) == -1 when idx= 3,7,11,.. ; == 1 when idx= 1,5,9,..
+                        let w = w.powi(idx as i32) * ((1 - (idx & 0x2) as isize) as f64);
+                        (w, -w)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let w_coeffs_even = (2..=N)
+            .into_iter()
+            .step_by(2)
+            .map(|idx| {
+                w_coeff_base
+                    .iter()
+                    .map(move |w| {
+                        //* ((1 - (idx & 0x2) as isize) as f64) == -1 when idx= 2,6,10,.. ; == 1 when idx= 4,8,12,..
+                        let w = w.powi(idx as i32) * ((1 - (idx & 0x2) as isize) as f64);
+                        w
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        // exec_time.stop_print("coefs");
+        // exec_time.start();
 
         //initialize integrals 1st, 3rd, 5th,..
         uninit_data
             .iter_mut()
-            .enumerate()
             .step_by(2)
+            .zip(w_coeffs_odd)
             .par_bridge()
-            .for_each(|(idx, x)| {
+            .for_each(|(x, w_coeffs)| {
                 x.data
-                    .axis_iter_mut(Axis(0))
+                    .lanes_mut(Axis::TIME)
+                    .into_iter()
                     .into_par_iter()
-                    .zip(self.data.axis_iter(Axis(0)))
-                    .zip(w_coeff_base.par_iter())
-                    .for_each(|((mut oarray, iarray), w)| {
-                        //* ((1 - (idx & 0x2) as isize) as f64) == -1 when idx= 3,7,11,.. ; == 1 when idx= 1,5,9,..
-                        let w =
-                            w.powi((idx + 1) as i32) * ((1 - ((idx + 1) & 0x2) as isize) as f64);
-                        let w = (w, -w);
-                        oarray.zip_mut_with(&iarray, |o, i| {
-                            o.write(Complex64 {
-                                re : w.0 * i.im,
-                                im : w.1 * i.re,
-                            });
-                        })
+                    .zip(self.data.lanes(Axis::TIME).into_iter())
+                    .for_each(|(mut oarray, iarray)| {
+                        oarray
+                            .as_slice_memory_order_mut()
+                            .unwrap()
+                            .iter_mut()
+                            .zip(iarray.as_slice_memory_order().unwrap())
+                            .zip(&w_coeffs)
+                            .for_each(|((o, i), w)| {
+                                o.write(Complex64 {
+                                    re : w.0 * i.im,
+                                    im : w.1 * i.re,
+                                });
+                            })
                     })
             });
+        // exec_time.stop_print("integrals 1");
+        // exec_time.start();
+
         //initialize integrals 2nd, 4th, 6th,..
         uninit_data
             .iter_mut()
-            .enumerate()
             .skip(1)
             .step_by(2)
+            .zip(w_coeffs_even)
             .par_bridge()
-            .for_each(|(idx, x)| {
+            .for_each(|(x, w_coeffs)| {
                 x.data
-                    .axis_iter_mut(Axis(0))
+                    .lanes_mut(Axis::TIME)
+                    .into_iter()
                     .into_par_iter()
-                    .zip(self.data.axis_iter(Axis(0)))
-                    .zip(w_coeff_base.par_iter())
-                    .for_each(|((mut oarray, iarray), w)| {
-                        //* ((1 - (idx & 0x2) as isize) as f64) == -1 when idx= 2,6,10,.. ; == 1 when idx= 4,8,12,..
-                        let w =
-                            w.powi((idx + 1) as i32) * ((1 - ((idx + 1) & 0x2) as isize) as f64);
-                        oarray.zip_mut_with(&iarray, |o, i| {
-                            o.write(Complex64 {
-                                re : w * i.re,
-                                im : w * i.im,
-                            });
-                        })
+                    .zip(self.data.lanes(Axis::TIME).into_iter())
+                    .for_each(|(mut oarray, iarray)| {
+                        oarray
+                            .as_slice_memory_order_mut()
+                            .unwrap()
+                            .iter_mut()
+                            .zip(iarray.as_slice_memory_order().unwrap())
+                            .zip(&w_coeffs)
+                            .for_each(|((o, i), w)| {
+                                o.write(Complex64 {
+                                    re : w * i.re,
+                                    im : w * i.im,
+                                });
+                            })
                     })
             });
+        // exec_time.stop_print("integrals 2");
+        // exec_time.start();
 
         // Everything is initialized. Transmute the array to the
         // initialized type.
         let ptr = &mut uninit_data as *mut _ as *mut [TTFourier; N];
         let mut res = unsafe { ptr.read() };
+        mem::forget(uninit_data);
+        // exec_time.stop_print("cast");
+        // exec_time.start();
+
         res.par_iter_mut().for_each(|x| {
             let fill = Complex64::new(0.0, 0.0);
-            x.data.index_axis_mut(Axis(0), 0).fill(fill);
+            x.data.index_axis_mut(Axis::TIME, 0).fill(fill);
         });
-        mem::forget(uninit_data);
+        // exec_time.stop_print("end");
+
         res
     }
 
     pub fn inverse_transform(&self) -> Array3<f64>
     {
         let mut shape = self.data.dim();
-        shape.0 = self.time_len as usize;
-        let mut handler = R2cFftHandler::<f64>::new(shape.0);
+        shape.2 = self.time_len as usize;
+        let mut handler = R2cFftHandler::<f64>::new(shape.2);
         let mut output = Array3::zeros(shape);
-        ndifft_r2c_par(&self.data, &mut output, &mut handler, 0);
-        output.slice_axis_inplace(Axis(0), Slice::from(..self.time_len_wo_padding as usize));
+        ndifft_r2c_par(&self.data, &mut output, &mut handler, 2);
+        output.slice_axis_inplace(Axis::TIME, Slice::from(..self.time_len_wo_padding as usize));
         output
     }
 
     pub fn integrals<const N: usize>(&self) -> [Array3<f64>; N]
     {
-        self.integrals_dft().map(|x| x.inverse_transform())
+        // let mut exec_time = ExecutionTimeMeas::new("exec_time_fourier.txt");
+        // exec_time.start();
+        let temp = self.integrals_dft();
+        // exec_time.stop_print("initial");
+        // exec_time.start();
+        let ret = temp.map(|x| x.inverse_transform());
+        // exec_time.stop_print("ifft");
+        ret
     }
 }

@@ -1,14 +1,16 @@
 use binrw::io::{BufReader, NoSeek};
 use binrw::*;
 use egui::{ColorImage, TextureOptions};
-use ndarray::{s, ArrayView2, Axis};
+use ndarray::{s, ArrayView2};
 use ndarray_ndimage::{convolve, BorderMode};
 use parking_lot::{Condvar, Mutex};
-use rayon::prelude::{IntoParallelIterator, ParallelExtend, ParallelIterator};
+use rayon::prelude::{IntoParallelIterator, ParallelExtend};
 use rayon::slice::ParallelSliceMut;
 use std::f64::consts::{FRAC_1_PI, PI};
 use std::ffi::{OsStr, OsString};
-use std::fs::{remove_file, File};
+#[cfg(not(debug_assertions))]
+use std::fs::remove_file;
+use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -79,7 +81,7 @@ impl TTViewBackend
             {
                 if let Some(input) = input_data
                 {
-                    let input_view = input.data.index_axis(Axis(0), params.time.val);
+                    let input_view = input.data.index_axis(Axis::TIME, params.time.val);
                     let denoise = params.denoise;
                     self.update_image(input_view, TTGradients::Linear, denoise);
                 }
@@ -166,8 +168,8 @@ impl TTViewBackend
             array.reborrow()
         };
         let array_roi = array.slice(s![
+            self.settings.roi.min.get().x as usize..=self.settings.roi.max.get().x as usize,
             self.settings.roi.min.get().y as usize..=self.settings.roi.max.get().y as usize,
-            self.settings.roi.min.get().x as usize..=self.settings.roi.max.get().x as usize
         ]);
         let array_iter;
         let mut array_vec;
@@ -178,7 +180,7 @@ impl TTViewBackend
             let non_roi_len = array.len() - roi_len;
             //replicate roi pixels `roi_mul`-1 times to ensure that roi pixels occurs(in histogram) as if roi spans above at least 70% of image
             let roi_mul = (7.0 / 3.0 * non_roi_len as f64 / roi_len as f64).ceil() as usize;
-            array_iter = array.into_par_iter().cloned();
+            array_iter = array.t().into_iter().cloned();
 
             array_vec = Vec::with_capacity(non_roi_len + roi_len * roi_mul + 2);
             array_vec.extend_from_slice(array.as_slice_memory_order().unwrap());
@@ -187,15 +189,15 @@ impl TTViewBackend
             {
                 array_vec.extend(array_roi_iter.clone());
             }
-            image_dim = [array.dim().1, array.dim().0];
+            image_dim = [array.dim().0, array.dim().1];
         }
         else
         {
             let roi_len = array_roi.len();
             array_vec = Vec::with_capacity(roi_len + 2);
-            array_iter = array_roi.into_par_iter().cloned();
-            array_vec.par_extend(array_iter.clone());
-            image_dim = [array_roi.dim().1, array_roi.dim().0];
+            array_iter = array_roi.t().into_iter().cloned();
+            array_vec.par_extend(array_roi.into_par_iter());
+            image_dim = [array_roi.dim().0, array_roi.dim().1];
         }
         if grad == TTGradients::Phase
         {
@@ -564,6 +566,7 @@ impl TTStateBackend
                                             .input_data
                                             .write_le(&mut encoder_buffered)
                                         {
+                                            #[cfg(not(debug_assertions))]
                                             let _ = remove_file(path);
                                         }
                                     }
