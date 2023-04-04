@@ -15,7 +15,6 @@ use egui::{
 };
 use egui_extras::{Column, TableBuilder};
 use parking_lot::{Condvar, Mutex};
-use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -25,7 +24,7 @@ use triple_buffer::triple_buffer;
 
 use crate::tt_backend_state::*;
 use crate::tt_common::*;
-use crate::tt_input_data::SUPPORTED_FILE_EXTENSIONS;
+use crate::tt_file::TTFile;
 use crate::wavelet::WaveletType;
 
 //=======================================
@@ -44,7 +43,7 @@ pub struct TTFileGUI
 {
     frames : Arc<AtomicUsize>,
     state :  Arc<AtomicFileState>,
-    path :   tribuf::Input<Option<OsString>>,
+    path :   tribuf::Input<Option<TTFile>>,
 }
 
 pub struct TTStateGUI
@@ -450,7 +449,7 @@ impl TTViewGUI
 
 impl TTStateGUI
 {
-    pub fn new(ctx : &egui::Context) -> Self
+    pub fn new(ctx : &egui::Context, file : Option<TTFile>) -> Self
     {
         TTGradients::init_grad(ctx);
         let default_view_params = [
@@ -467,12 +466,22 @@ impl TTStateGUI
         let [(g1,b1),(g2,b2),(g3,b3),(g4,b4)] //: [(TTViewGUI, TTViewBackend); 4] 
         = default_view_params.map( |x| tt_view_new("TTParams",x, ctx,settings.clone()));
 
-        let (path_gui, path_backend) = triple_buffer(&None);
+        let (path_gui, path_backend);
+        let state;
+        if let Some(file) = file
+        {
+            (path_gui, path_backend) = triple_buffer(&Some(file));
+            state = Arc::new(AtomicFileState::new(FileState::New));
+        }
+        else
+        {
+            (path_gui, path_backend) = triple_buffer(&None);
+            state = Arc::new(AtomicFileState::new(FileState::None));
+        }
 
         let changed = Arc::new((Mutex::new(false), Condvar::new()));
         let stop_flag = Arc::new(AtomicBool::new(false));
         let frames = Arc::new(AtomicUsize::new(0));
-        let state = Arc::new(AtomicFileState::new(FileState::None));
         TTStateGUI {
             views :          [g1, g2, g3, g4],
             changed :        changed.clone(),
@@ -505,20 +514,20 @@ impl TTStateGUI
         *started = true;
         cvar.notify_one();
     }
-    pub fn set_file_path(&mut self, path : OsString) -> ()
+    pub fn set_file_path(&mut self, path : Option<TTFile>) -> ()
     {
         //invalidate views
         self.views
             .iter()
             .for_each(|view| view.state.store(TTViewState::Invalid, Ordering::Relaxed));
         //"send" updated path to backend
-        self.file.path.write(Some(path.clone()));
+        self.file.path.write(path.clone());
         //update new gui working buffer
-        *self.file.path.input_buffer() = Some(path);
+        *self.file.path.input_buffer() = path;
         self.file.state.store(FileState::New, Ordering::Relaxed);
         self.notify_backend()
     }
-    pub fn get_file(&mut self) -> (Option<OsString>, FileState)
+    pub fn get_file(&mut self) -> (Option<TTFile>, FileState)
     {
         (
             (*self.file.path.input_buffer()).clone(),
@@ -543,13 +552,13 @@ impl TTStateGUI
                     (_, FileState::None) => (),
                     (Some(path), FileState::ReadySaving) =>
                     {
-                        ui.label(path.to_string_lossy());
+                        ui.label(path.path());
                         ui.label(" Saving...");
                         ui.spinner();
                     }
                     (Some(path), FileState::Ready) =>
                     {
-                        ui.label(path.to_string_lossy());
+                        ui.label(path.path());
                     }
                     (Some(path), FileState::Loaded) =>
                     {
@@ -589,25 +598,25 @@ impl TTStateGUI
                             view.state.store(TTViewState::Changed, Ordering::Relaxed);
                         });
                         self.notify_backend();
-                        ui.label(path.to_string_lossy());
+                        ui.label(path.path());
                         ui.label(" Processing...");
                         ui.spinner();
                     }
                     (Some(path), FileState::ProcessingWavelet) =>
                     {
-                        ui.label(path.to_string_lossy());
+                        ui.label(path.path());
                         ui.label(" Processing Wavelet transforms...");
                         ui.spinner();
                     }
                     (Some(path), FileState::ProcessingFourier) =>
                     {
-                        ui.label(path.to_string_lossy());
+                        ui.label(path.path());
                         ui.label(" Processing Fourier transforms...");
                         ui.spinner();
                     }
                     (Some(path), FileState::Error) =>
                     {
-                        ui.label(path.to_string_lossy());
+                        ui.label(path.path());
                         ui.label(
                             RichText::new(" !!! Invalid file !!!")
                                 .color(Color32::RED)
@@ -617,33 +626,17 @@ impl TTStateGUI
                     }
                     (Some(path), _) =>
                     {
-                        ui.label(path.to_string_lossy());
+                        ui.label(path.path());
                         ui.label(" Loading...");
                         ui.spinner();
                     }
                 }
                 if ui.button("…").clicked()
                 {
-                    let future = async {
-                        let file = rfd::AsyncFileDialog::new()
-                            .add_filter("Thermogram Sequence", SUPPORTED_FILE_EXTENSIONS)
-                            .pick_file()
-                            .await;
-
-                        let data = file;
-                        if let Some(path) = data
-                        {
-                            #[cfg(not(target_arch = "wasm32"))]
-                            {
-                                self.set_file_path(path.inner().into());
-                            }
-                            #[cfg(target_arch = "wasm32")]
-                            {
-                                self.set_file_path(path.inner().unwrap());
-                            }
-                        }
-                    };
-                    futures::executor::block_on(future);
+                    if let Some(path) = TTFile::new_from_file_dialog()
+                    {
+                        self.set_file_path(Some(path));
+                    }
                 }
                 if self.settings.roi_zoom.show_switchable(ui, "zoom ROI")
                 {

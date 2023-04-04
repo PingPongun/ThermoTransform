@@ -18,7 +18,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crate::tt_common::*;
-use crate::tt_input_data::TTInputData;
 pub struct TTFourier
 {
     time_len :            u32,

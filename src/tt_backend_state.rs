@@ -1,5 +1,3 @@
-use binrw::io::{BufReader, NoSeek};
-use binrw::*;
 use egui::{ColorImage, TextureOptions};
 use ndarray::{s, ArrayView2};
 use ndarray_ndimage::{convolve, BorderMode};
@@ -7,22 +5,15 @@ use parking_lot::{Condvar, Mutex};
 use rayon::prelude::{IntoParallelIterator, ParallelExtend};
 use rayon::slice::ParallelSliceMut;
 use std::f64::consts::{FRAC_1_PI, PI};
-use std::ffi::{OsStr, OsString};
-#[cfg(not(debug_assertions))]
-use std::fs::remove_file;
-use std::fs::File;
-use std::io::BufWriter;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use triple_buffer as tribuf;
 use triple_buffer::triple_buffer;
-use zstd;
 
 use crate::cwt::*;
 use crate::tt_common::*;
+use crate::tt_file::TTFile;
 use crate::tt_fourier::TTFourier;
-use crate::tt_input_data::*;
 use crate::wavelet::{WaveletBank, WaveletBankTrait};
 
 //=======================================
@@ -35,21 +26,19 @@ pub struct TTViewBackend
     pub params :     tribuf::Output<TTViewParams>,
     pub settings :   Arc<GlobalSettings>,
 }
-#[binrw]
+
 #[derive(Default)]
 struct TTFileBackendData
 {
     input_data : Option<TTInputData>,
-    #[brw(ignore)]
     lazy_cwt :   Option<TTLazyCWT>,
-    #[brw(ignore)]
     fourier :    Option<TTFourier>,
 }
 struct TTFileBackend
 {
     frames : Arc<AtomicUsize>,
     state :  Arc<AtomicFileState>,
-    path :   tribuf::Output<Option<OsString>>,
+    path :   tribuf::Output<Option<TTFile>>,
     data :   TTFileBackendData,
 }
 
@@ -183,11 +172,10 @@ impl TTViewBackend
             array_iter = array.t().into_iter().cloned();
 
             array_vec = Vec::with_capacity(non_roi_len + roi_len * roi_mul + 2);
-            array_vec.extend_from_slice(array.as_slice_memory_order().unwrap());
-            let array_roi_iter = array_roi.iter();
+            array_vec.par_extend(array.into_par_iter());
             for _ in 1..roi_mul
             {
-                array_vec.extend(array_roi_iter.clone());
+                array_vec.par_extend(array_roi.into_par_iter());
             }
             image_dim = [array.dim().0, array.dim().1];
         }
@@ -277,7 +265,7 @@ impl TTFileBackend
     pub fn new(
         frames : Arc<AtomicUsize>,
         state : Arc<AtomicFileState>,
-        path : tribuf::Output<Option<OsString>>,
+        path : tribuf::Output<Option<TTFile>>,
     ) -> Self
     {
         Self {
@@ -296,7 +284,7 @@ impl TTStateBackend
         stop_flag : Arc<AtomicBool>,
         frames : Arc<AtomicUsize>,
         state : Arc<AtomicFileState>,
-        path : tribuf::Output<Option<OsString>>,
+        path : tribuf::Output<Option<TTFile>>,
         settings : Arc<GlobalSettings>,
     ) -> Self
     {
@@ -359,45 +347,11 @@ impl TTStateBackend
                 {
                     self.file.data.lazy_cwt = None;
                     self.file.data.fourier = None;
-                    if let Some(path) = self.file.path.read()
+                    self.file.path.update();
+                    if let Some(ref mut path) = self.file.path.output_buffer()
                     {
                         exec_time.start();
-                        if PathBuf::from(path).extension() == Some(OsStr::new("ttcf"))
-                        {
-                            if let Ok(f) = File::open(path)
-                            {
-                                if let Ok(decoder) = zstd::Decoder::new(f)
-                                {
-                                    self.file.data.input_data = Option::<TTInputData>::read_le(
-                                        &mut NoSeek::new(BufReader::new(decoder)),
-                                    )
-                                    .unwrap_or(None);
-                                    if self.file.data.input_data == None
-                                    {
-                                        let _ = self.file.state.compare_exchange(
-                                            FileState::Loading,
-                                            FileState::Error,
-                                            Ordering::SeqCst,
-                                            Ordering::Acquire,
-                                        );
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                let _ = self.file.state.compare_exchange(
-                                    FileState::Loading,
-                                    FileState::Error,
-                                    Ordering::SeqCst,
-                                    Ordering::Acquire,
-                                );
-                            }
-                        }
-                        else
-                        {
-                            self.file.data.input_data =
-                                TTInputData::new(path, self.file.state.clone());
-                        }
+                        self.file.data.input_data = path.data_load(self.file.state.clone());
                         exec_time.stop_print("file loading time");
                         if let Some(input) = &self.file.data.input_data
                         {
@@ -543,42 +497,20 @@ impl TTStateBackend
                             }
                         },
                         || {
-                            if let Some(path) = self.file.path.read()
+                            if let Some(ref path) = self.file.path.read()
                             {
-                                let mut file_name = PathBuf::from(path);
-                                if file_name.extension() != Some(OsStr::new("ttcf"))
+                                if let Some(ref data) = self.file.data.input_data
                                 {
-                                    file_name.set_extension("ttcf");
-                                    if let Ok(f) = File::create(file_name)
-                                    {
-                                        let fr = BufWriter::new(f);
-                                        let mut encoder = zstd::Encoder::new(fr, 8).unwrap();
-                                        let _ = encoder.include_checksum(true);
-                                        let _ = encoder
-                                            .multithread(num_cpus::get().saturating_sub(2) as u32);
-                                        let encoder = encoder.auto_finish();
-
-                                        let mut encoder_buffered =
-                                            NoSeek::new(BufWriter::new(encoder));
-                                        if let Ok(_) = self
-                                            .file
-                                            .data
-                                            .input_data
-                                            .write_le(&mut encoder_buffered)
-                                        {
-                                            #[cfg(not(debug_assertions))]
-                                            let _ = remove_file(path);
-                                        }
-                                    }
+                                    let _ = path.data_store(data);
                                     exec_time.stop_print("saving to file");
+                                    //file processed correctly
+                                    let _ = self.file.state.compare_exchange(
+                                        FileState::ReadySaving,
+                                        FileState::Ready,
+                                        Ordering::SeqCst,
+                                        Ordering::Acquire,
+                                    );
                                 }
-                                //file processed correctly
-                                let _ = self.file.state.compare_exchange(
-                                    FileState::ReadySaving,
-                                    FileState::Ready,
-                                    Ordering::SeqCst,
-                                    Ordering::Acquire,
-                                );
                             }
                         },
                     );

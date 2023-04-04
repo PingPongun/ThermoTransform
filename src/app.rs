@@ -1,8 +1,17 @@
-use std::ffi::OsString;
-use std::str::FromStr;
+use clap::Parser;
 
+use crate::tt_file::TTFile;
 use crate::tt_gui_state::TTStateGUI;
-use crate::tt_input_data::SUPPORTED_FILE_EXTENSIONS;
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli
+{
+    /// Choose input data
+    #[arg(value_name = "FILE")]
+    input_file : Option<TTFile>,
+}
+
 pub struct ThermoTransformApp
 {
     pub backend : TTStateGUI,
@@ -13,6 +22,7 @@ impl ThermoTransformApp
     /// Called once before the first frame.
     pub fn new(cc : &eframe::CreationContext<'_>) -> Self
     {
+        let cli = Cli::parse();
         // This is also where you can customized the look at feel of egui using
         // `cc.egui_ctx.set_visuals` and `cc.egui_ctx.set_fonts`.
 
@@ -23,7 +33,7 @@ impl ThermoTransformApp
         //     return eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
         // }
         Self {
-            backend : TTStateGUI::new(&cc.egui_ctx),
+            backend : TTStateGUI::new(&cc.egui_ctx, cli.input_file),
         }
     }
 }
@@ -57,14 +67,9 @@ impl eframe::App for ThermoTransformApp
                     {
                         Some(path) =>
                         {
-                            for &ext in SUPPORTED_FILE_EXTENSIONS
+                            if let Some(file) = TTFile::new_prevalidated(path)
                             {
-                                if path.extension()
-                                    == Some(OsString::from_str(ext).unwrap().as_os_str())
-                                {
-                                    backend.set_file_path(path.into());
-                                    break;
-                                }
+                                backend.set_file_path(Some(file));
                             }
                         }
                         None => (),
@@ -92,28 +97,19 @@ fn preview_files_being_dropped(ctx : &egui::Context)
             {
                 if let Some(path) = &file.path
                 {
-                    let mut supported_ext = false;
-                    for &ext in SUPPORTED_FILE_EXTENSIONS
+                    if let Some(_) = TTFile::new_prevalidated(path.clone())
                     {
-                        if path.extension() == Some(OsString::from_str(ext).unwrap().as_os_str())
-                        {
-                            supported_ext = true;
-                            break;
-                        }
-                    }
-                    if supported_ext
-                    {
-                        write!(text, "\n{}", path.display()).ok();
+                        let _ = write!(text, "\n{}", path.display());
                     }
                     else
                     {
-                        write!(text, "\n!!! {}: INVALID FILE FORMAT!!!", path.display()).ok();
+                        let _ = write!(text, "\n!!! {}: INVALID FILE FORMAT!!!", path.display());
                         background_color = Color32::from_rgba_unmultiplied(255, 0, 0, 192);
                     }
                 }
                 else if !file.mime.is_empty()
                 {
-                    write!(text, "\n{}", file.mime).ok();
+                    let _ = write!(text, "\n{}", file.mime);
                 }
                 else
                 {

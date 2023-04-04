@@ -35,6 +35,7 @@ fast-float={git="https://github.com/PingPongun/fast-float-rust.git", branch = "m
 binrw = "0.11"
 zstd = {version="0.12.3+zstd.1.5.2",features=["zstdmt"]}
 num_cpus = "1.15"
+clap={version="4.2", features=["derive"]}
 macros={path="macros/"}
 
 [patch.crates-io]

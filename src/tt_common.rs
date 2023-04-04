@@ -1,6 +1,7 @@
 use atomic_enum::atomic_enum;
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 use lazy_static::*;
+use ndarray::Array3;
 use static_assertions::assert_eq_align;
 use static_assertions::assert_eq_size;
 
@@ -167,7 +168,14 @@ pub struct ExecutionTimeMeas
     #[cfg(feature = "time_meas")]
     writer :          BufWriter<File>,
 }
-
+#[derive(PartialEq)]
+pub struct TTInputData
+{
+    pub frames : u32,
+    pub width :  u32,
+    pub height : u32,
+    pub data :   Array3<f64>,
+}
 //=======================================
 //=====Traits & Trait Implementations====
 //=======================================
