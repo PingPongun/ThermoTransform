@@ -161,7 +161,8 @@ impl TTFile
             const IMAGE_DATA_LEN : usize = IMAGE_PIXELS * 6;
             const IMAGE_LEN : usize = IMAGE_DATA_LEN + IMAGE_TOP_HEADER_LEN + IMAGE_ROW_HEADER_LEN;
             let estimated_frames = (meta.len() as usize - FILE_HEADER_LEN) / IMAGE_LEN;
-            rounded_frames = find_next_pows_2_3(estimated_frames);
+            // rounded_frames = find_next_pows_2_3(estimated_frames);
+            rounded_frames = estimated_frames;
             // exec_time.stop_print("pows_2_3 find");
             // exec_time.start();
 
