@@ -17,7 +17,7 @@ use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use crate::macros::array_pows_2_3;
+// use crate::macros::array_pows_2_3;
 use crate::tt_common::*;
 
 #[derive(Clone, PartialEq)]
@@ -85,7 +85,7 @@ impl TTFile
                 if let Ok(_) = FileTTCF::from(data).write_le(&mut encoder_buffered)
                 {
                     #[cfg(not(debug_assertions))]
-                    let _ = remove_file(self.path);
+                    let _ = remove_file(self.path.clone());
                     return Ok(());
                 }
                 else
@@ -317,9 +317,9 @@ impl TTFile
                     };
                     let ret = Some(TTInputData {
                         data :   data_transposed,
-                        frames : frames as u32,
-                        width :  columns as u32,
-                        height : rows as u32,
+                        frames : frames,
+                        width :  columns,
+                        height : rows,
                     });
                     // exec_time.stop_print("end");
                     return ret;
@@ -441,9 +441,9 @@ impl Into<TTInputData> for FileTTCF
     fn into(self) -> TTInputData
     {
         TTInputData {
-            frames : self.frames,
-            width :  self.width,
-            height : self.height,
+            frames : self.frames as usize,
+            width :  self.width as usize,
+            height : self.height as usize,
             data :   self.data,
         }
     }
@@ -453,9 +453,9 @@ impl From<&TTInputData> for FileTTCF
     fn from(value : &TTInputData) -> Self
     {
         Self {
-            frames : value.frames,
-            width :  value.width,
-            height : value.height,
+            frames : value.frames as u32,
+            width :  value.width as u32,
+            height : value.height as u32,
             data :   value.data.clone(), //TODO !
         }
     }
@@ -624,17 +624,17 @@ fn f64_decompress(x : u32) -> f64
     f32::from_bits(f32_bits) as f64
 }
 
-const PRIMES : &'static [usize] = array_pows_2_3!();
-fn find_next_pows_2_3(val : usize) -> usize
-{
-    match PRIMES.binary_search(&val)
-    {
-        Ok(_idx) => val,
-        Err(idx) =>
-        {
-            debug_assert!(PRIMES[idx] > val);
-            debug_assert!(PRIMES[idx] < 2 * val);
-            PRIMES[idx]
-        }
-    }
-}
+// const PRIMES : &'static [usize] = array_pows_2_3!();
+// fn find_next_pows_2_3(val : usize) -> usize
+// {
+//     match PRIMES.binary_search(&val)
+//     {
+//         Ok(_idx) => val,
+//         Err(idx) =>
+//         {
+//             debug_assert!(PRIMES[idx] > val);
+//             debug_assert!(PRIMES[idx] < 2 * val);
+//             PRIMES[idx]
+//         }
+//     }
+// }

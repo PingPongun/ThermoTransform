@@ -1,3 +1,7 @@
+use crate::tt_backend_state::*;
+use crate::tt_common::*;
+use crate::tt_file::TTFile;
+use crate::wavelet::WaveletType;
 use egui::{
     Color32,
     ColorImage,
@@ -14,18 +18,15 @@ use egui::{
     Vec2,
 };
 use egui_extras::{Column, TableBuilder};
+use ndarray::IntoDimension;
 use parking_lot::{Condvar, Mutex};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use strum::VariantNames;
 use triple_buffer as tribuf;
 use triple_buffer::triple_buffer;
-
-use crate::tt_backend_state::*;
-use crate::tt_common::*;
-use crate::tt_file::TTFile;
-use crate::wavelet::WaveletType;
+use Ordering::Relaxed;
 
 //=======================================
 //=================Types=================
@@ -33,17 +34,16 @@ use crate::wavelet::WaveletType;
 
 pub struct TTViewGUI
 {
-    state :    Arc<AtomicTTViewState>,
-    image :    tribuf::Output<Thermogram>,
-    params :   tribuf::Input<TTViewParams>,
-    settings : Arc<GlobalSettings>,
+    state :     Arc<AtomicTTViewState>,
+    image :     tribuf::Output<Thermogram>,
+    view_mode : Arc<ViewMode>,
+    settings :  Arc<GlobalSettings>,
 }
 
 pub struct TTFileGUI
 {
-    frames : Arc<AtomicUsize>,
-    state :  Arc<AtomicFileState>,
-    path :   tribuf::Input<Option<TTFile>>,
+    state : Arc<AtomicFileState>,
+    path :  tribuf::Input<Option<TTFile>>,
 }
 
 pub struct TTStateGUI
@@ -84,7 +84,7 @@ impl BoolSwitchable<bool> for bool
         retval
     }
 }
-trait AtomicBoolSwitchable<T>
+pub trait AtomicBoolSwitchable<T>
 {
     fn show_switchable(&self, ui : &mut egui::Ui, text : &str) -> bool;
 }
@@ -110,7 +110,7 @@ impl AtomicBoolSwitchable<AtomicBool> for AtomicBool
         retval
     }
 }
-trait EnumCombobox<T>
+pub trait EnumCombobox<T>
 {
     fn show_combobox(&mut self, ui : &mut egui::Ui) -> bool;
 }
@@ -152,9 +152,119 @@ where
         retval
     }
 }
+
 //=======================================
 //=====Common Types Implementations======
 //=======================================
+
+macro_rules! atomicCombobox {
+    ($atomic:expr,$ui:ident) => {{
+        let mut _atomicCombobox = $atomic.load(Ordering::Relaxed);
+        let _ret = _atomicCombobox.show_combobox($ui);
+        $atomic.store(_atomicCombobox, Ordering::Relaxed);
+        _ret
+    }};
+}
+impl ViewMode
+{
+    pub fn controls(&self, global : &GlobalSettings, ui : &mut egui::Ui) -> bool
+    {
+        let mut changed = false;
+
+        ui.horizontal_wrapped(|ui| {
+            if atomicCombobox!(self.domain, ui)
+            {
+                //domain has changed: clip mode_counter
+                let mode_axes = Self::ViewModeAxes[self.domain.load(Ordering::Relaxed) as usize];
+                let mut mode_counter = self.mode_counter.load(Ordering::Relaxed);
+                mode_counter = mode_counter % mode_axes.len();
+                self.mode_counter.store(mode_counter, Ordering::Relaxed);
+                changed = true;
+            }
+            let mode_axes = Self::ViewModeAxes[self.domain.load(Ordering::Relaxed) as usize];
+            let mut mode_counter = self.mode_counter.load(Ordering::Relaxed);
+            let settings_axes = mode_axes[mode_counter].1;
+            /*view mode button*/
+            {
+                let [a, b] = self.get_view_axes();
+                let text = format!("{}-{}", Into::<char>::into(a), Into::<char>::into(b));
+                if ui.button(text).clicked()
+                {
+                    mode_counter = (mode_counter + 1) % mode_axes.len();
+                    self.mode_counter.store(mode_counter, Ordering::Relaxed);
+                    changed = true;
+                }
+            }
+            changed |= self.bind_position.show_switchable(ui, "🔗");
+            match self.domain.load(Ordering::Relaxed)
+            {
+                ViewModeDomain::TimeView =>
+                {}
+                ViewModeDomain::FourierView =>
+                {
+                    ui.style_mut().wrap = Some(false);
+                    ui.label("| mode:");
+                    changed |= atomicCombobox!(self.display_mode, ui);
+                }
+                ViewModeDomain::WaveletView =>
+                {
+                    ui.style_mut().wrap = Some(false);
+                    ui.label("| mode:");
+                    changed |= atomicCombobox!(self.display_mode, ui);
+                    ui.style_mut().wrap = Some(false);
+                    ui.label("| wavelet:");
+                    changed |= atomicCombobox!(self.wavelet, ui);
+                }
+            }
+            /*position DragValues*/
+            {
+                let mut position = self.position.write();
+                if self.bind_position.load(Ordering::Relaxed)
+                {
+                    let gp = *global.crossection.read();
+                    settings_axes.iter().for_each(|&i| {
+                        changed |= gp[i as usize] != position[i as usize];
+                    });
+                    *position = gp;
+                }
+                let full_size = global.full_size.read();
+                for &axis in settings_axes
+                {
+                    let uaxis = axis as usize;
+                    let mut ranged_val = if axis == TTAxis::S
+                    {
+                        RangedVal {
+                            val : position[uaxis] + 1,
+                            min : 1,
+                            max : full_size[uaxis] + 1,
+                        }
+                    }
+                    else
+                    {
+                        RangedVal {
+                            val : position[uaxis],
+                            min : 0,
+                            max : full_size[uaxis],
+                        }
+                    };
+                    ui.label(Into::<&str>::into(axis));
+                    changed |= ranged_val.show(ui);
+                    position[uaxis] = ranged_val.val;
+                    if axis == TTAxis::S
+                    {
+                        position[uaxis] -= 1;
+                    }
+                }
+                if self.bind_position.load(Ordering::Relaxed)
+                {
+                    *global.crossection.write() = *position;
+                }
+            }
+            changed |= self.denoise.show_switchable(ui, "denoise");
+        });
+        changed
+    }
+}
 impl RangedVal
 {
     fn show(&mut self, ui : &mut egui::Ui) -> bool
@@ -168,10 +278,10 @@ impl Thermogram
     fn show(
         &self,
         ui : &mut egui::Ui,
-        settings : &Arc<GlobalSettings>,
+        settings : &GlobalSettings,
+        view_axes : [TTAxis; 2],
     ) -> (bool, egui::InnerResponse<()>)
     {
-        let roi = &settings.roi;
         let available_size = ui.available_size();
         let image_aspect = self.image.aspect_ratio();
         let mut retval = false;
@@ -194,49 +304,72 @@ impl Thermogram
         let responce = ui.horizontal_centered(|ui| {
             let img_rsp = ui.add(Image::new(self.image.id(), size).sense(Sense::click()));
             let size = img_rsp.rect.size();
-            let roi_min = roi.min.get();
-            let roi_max = roi.max.get();
-            let full_size = roi.full_size.get();
+            let mut roi_min_x = settings.roi_min.read()[view_axes[0] as usize];
+            let mut roi_min_y = settings.roi_min.read()[view_axes[1] as usize];
+            let mut roi_max_x = settings.roi_max.read()[view_axes[0] as usize];
+            let mut roi_max_y = settings.roi_max.read()[view_axes[1] as usize];
+            let full_size_x = settings.full_size.read()[view_axes[0] as usize];
+            let full_size_y = settings.full_size.read()[view_axes[1] as usize];
             let roi_zoom = settings.roi_zoom.load(Ordering::Relaxed);
-            let mut click_action = |min| {
+            if img_rsp.clicked()
+            {
+                //left click- convert click_position to data_position
+                let select_mode = settings.select_mode.load(Relaxed);
                 let click_pos = img_rsp.interact_pointer_pos().unwrap();
-                if roi_zoom
+                let (mut new_x, mut new_y) = if roi_zoom
                 {
-                    let (width, height) = (roi_max.x - roi_min.x, roi_max.y - roi_min.y);
-                    roi.set(
-                        (roi_min.x as f32
+                    let (width, height) = (roi_max_x - roi_min_x, roi_max_y - roi_min_y);
+
+                    (
+                        (roi_min_x as f32
                             + width as f32 * (click_pos.x - img_rsp.rect.min.x) / size.x)
-                            as u16,
-                        (roi_min.y as f32
+                            as usize,
+                        (roi_min_y as f32
                             + height as f32 * (click_pos.y - img_rsp.rect.min.y) / size.y)
-                            as u16,
-                        min,
-                    );
+                            as usize,
+                    )
                 }
                 else
                 {
                     //roi zoom not enabled
-                    roi.set(
-                        (full_size.x as f32 * (click_pos.x - img_rsp.rect.min.x) / size.x) as u16,
-                        (full_size.y as f32 * (click_pos.y - img_rsp.rect.min.y) / size.y) as u16,
-                        min,
-                    );
+                    (
+                        (full_size_x as f32 * (click_pos.x - img_rsp.rect.min.x) / size.x) as usize,
+                        (full_size_y as f32 * (click_pos.y - img_rsp.rect.min.y) / size.y) as usize,
+                    )
+                };
+                new_x = new_x.clamp(0, full_size_x - 1);
+                new_y = new_y.clamp(0, full_size_y - 1);
+                if select_mode == SelectMode::Crossection
+                {
+                    let mut crossection = settings.crossection.write();
+                    crossection[view_axes[0] as usize] = new_x;
+                    crossection[view_axes[1] as usize] = new_y;
+                }
+                else
+                {
+                    //selecting ROI
+                    let (other_x, other_y) = if select_mode == SelectMode::RoiMax
+                    {
+                        (roi_min_x.clone(), roi_min_y.clone())
+                    }
+                    else
+                    {
+                        //SelectMode::RoiMin
+                        (roi_max_x.clone(), roi_max_y.clone())
+                    };
+                    roi_min_x = usize::min(new_x, other_x);
+                    roi_min_y = usize::min(new_y, other_y);
+                    roi_max_x = usize::max(new_x, other_x);
+                    roi_max_y = usize::max(new_y, other_y);
+                    let mut roi_min = settings.roi_min.write();
+                    let mut roi_max = settings.roi_max.write();
+                    roi_min[view_axes[0] as usize] = roi_min_x;
+                    roi_min[view_axes[1] as usize] = roi_min_y;
+                    roi_max[view_axes[0] as usize] = roi_max_x;
+                    roi_max[view_axes[1] as usize] = roi_max_y;
                 }
                 settings.changed(true);
                 retval = true;
-            };
-            if img_rsp.clicked()
-            {
-                //left click
-                click_action(false);
-            }
-            else if img_rsp.secondary_clicked()
-            {
-                //right click
-                click_action(true);
-            }
-            else
-            { //roi has not changed/ image not clicked
             }
             ui.painter_at(img_rsp.rect).rect_stroke(
                 if roi_zoom
@@ -247,17 +380,29 @@ impl Thermogram
                 {
                     Rect {
                         min : Pos2::new(
-                            roi_min.x as f32 / full_size.x as f32 * size.x + img_rsp.rect.min.x,
-                            roi_min.y as f32 / full_size.y as f32 * size.y + img_rsp.rect.min.y,
+                            roi_min_x as f32 / full_size_x as f32 * size.x + img_rsp.rect.min.x,
+                            roi_min_y as f32 / full_size_y as f32 * size.y + img_rsp.rect.min.y,
                         ),
                         max : Pos2::new(
-                            roi_max.x as f32 / full_size.x as f32 * size.x + img_rsp.rect.min.x,
-                            roi_max.y as f32 / full_size.y as f32 * size.y + img_rsp.rect.min.y,
+                            roi_max_x as f32 / full_size_x as f32 * size.x + img_rsp.rect.min.x,
+                            roi_max_y as f32 / full_size_y as f32 * size.y + img_rsp.rect.min.y,
                         ),
                     }
                 },
                 0.0,
                 Stroke::new(3.0, Color32::YELLOW),
+            );
+            let crossection_x = settings.crossection.read()[view_axes[0] as usize];
+            let crossection_y = settings.crossection.read()[view_axes[1] as usize];
+            ui.painter_at(img_rsp.rect).hline(
+                0.0..=size.x + img_rsp.rect.min.x,
+                crossection_y as f32 / full_size_y as f32 * size.y + img_rsp.rect.min.y,
+                Stroke::new(3.0, Color32::GREEN),
+            );
+            ui.painter_at(img_rsp.rect).vline(
+                crossection_x as f32 / full_size_x as f32 * size.x + img_rsp.rect.min.x,
+                0.0..=size.y + img_rsp.rect.min.y,
+                Stroke::new(3.0, Color32::GREEN),
             );
             ui.add_space(5.0);
             ui.vertical(|ui| {
@@ -307,55 +452,10 @@ impl Thermogram
         (retval, responce)
     }
 }
-impl TTViewParams
-{
-    ///#Returns (a,b)
-    /// a - any element changed?
-    /// b - scale changed?
-    fn show(&mut self, ui : &mut egui::Ui) -> (bool, bool)
-    {
-        let mut retval = (false, false);
-        ui.horizontal_wrapped(|ui| {
-            retval.0 |= self.show_combobox(ui);
-            match self
-            {
-                WaveletView(params) =>
-                {
-                    ui.style_mut().wrap = Some(false);
-                    ui.label("| mode:");
-                    retval.0 |= params.display_mode.show_combobox(ui);
-                    ui.style_mut().wrap = Some(false);
-                    ui.label("| wavelet:");
-                    retval.0 |= params.wavelet.show_combobox(ui);
-                    ui.label("| scale:");
-                    retval.1 |= params.scale.show(ui);
-                    retval.0 |= retval.1;
-                    ui.label("| frame:");
-                    retval.0 |= params.time.show(ui);
-                    retval.0 |= params.denoise.show_switchable(ui, "denoise");
-                }
-                TimeView(params) =>
-                {
-                    ui.label("| frame:");
-                    retval.0 |= params.time.show(ui);
-                    retval.0 |= params.denoise.show_switchable(ui, "denoise");
-                }
-                FourierView(params) =>
-                {
-                    ui.label("| mode:");
-                    retval.0 |= params.display_mode.show_combobox(ui);
-                    ui.label("| relative frequency:");
-                    retval.0 |= params.freq.show(ui);
-                    retval.0 |= params.denoise.show_switchable(ui, "denoise");
-                }
-            }
-        });
-        retval
-    }
-}
+
 fn tt_view_new(
     name : &str,
-    params : TTViewParams,
+    params : ViewMode,
     ctx : &Context,
     settings : Arc<GlobalSettings>,
 ) -> (TTViewGUI, TTViewBackend)
@@ -365,20 +465,21 @@ fn tt_view_new(
         ColorImage::new([100, 100], Color32::TRANSPARENT),
         TextureOptions::LINEAR,
     )));
-    let (params_input, params_output) = triple_buffer(&params);
+    let aparams = Arc::new(params.clone());
     let state = Arc::new(AtomicTTViewState::new(TTViewState::Invalid));
     (
         TTViewGUI {
-            state :    state.clone(),
-            image :    image_output,
-            params :   params_input,
-            settings : settings.clone(),
+            state :     state.clone(),
+            image :     image_output,
+            view_mode : aparams.clone(),
+            settings :  settings.clone(),
         },
         TTViewBackend {
-            state :      state,
-            thermogram : image_input,
-            params :     params_output,
-            settings :   settings.clone(),
+            state :            state,
+            thermogram :       image_input,
+            view_mode :        aparams,
+            settings :         settings.clone(),
+            frozen_view_mode : params,
         },
     )
 }
@@ -398,27 +499,11 @@ impl TTViewGUI
                 //grey out & block interactive elements of this view
                 ui.set_enabled(false);
             }
-            if let (true, scale_changed) = self.params.input_buffer().show(ui)
+            if self.view_mode.controls(&self.settings, ui)
             {
                 //params changed by user
                 retval = true;
-                if scale_changed
-                {
-                    if let WaveletView(mut params) = *self.params.input_buffer()
-                    {
-                        let out_count = params.scale.val - params.scale.min;
-                        let out_count_half = out_count >> 1;
-                        let out_count_half_larger = out_count - out_count_half;
-                        params.time.max = params.scale.max - 1 - out_count_half_larger;
-                        params.time.min = params.scale.min - 1 + out_count_half;
-                        (*self.params.input_buffer()) = WaveletView(params);
-                    }
-                }
-
                 self.state.store(TTViewState::Changed, Ordering::Relaxed);
-                let temp = self.params.input_buffer().clone();
-                self.params.publish();
-                *self.params.input_buffer() = temp;
             }
             let gram = self.image.read();
             ui.with_layout(
@@ -428,12 +513,14 @@ impl TTViewGUI
                     {
                         TTViewState::Valid =>
                         {
-                            let (changed, _rsp) = gram.show(ui, &self.settings);
+                            let (changed, _rsp) =
+                                gram.show(ui, &self.settings, self.view_mode.get_view_axes());
                             retval |= changed;
                         }
                         TTViewState::Processing | TTViewState::Changed =>
                         {
-                            let (changed, rsp) = gram.show(ui, &self.settings);
+                            let (changed, rsp) =
+                                gram.show(ui, &self.settings, self.view_mode.get_view_axes());
                             retval |= changed;
                             ui.put(rsp.response.rect, Spinner::default());
                             ui.ctx().request_repaint(); //faster next screen refresh, when waiting for new view
@@ -453,15 +540,28 @@ impl TTStateGUI
     {
         TTGradients::init_grad(ctx);
         let default_view_params = [
-            TTViewParams::time_default(),
-            TTViewParams::wavelet_wavelet(WaveletType::Morlet, ComplexResultMode::Phase),
-            TTViewParams::wavelet_wavelet(WaveletType::Morlet, ComplexResultMode::Magnitude),
-            TTViewParams::fourier_default(),
+            ViewMode::new(
+                ViewModeDomain::TimeView,
+                Default::default(),
+                Default::default(),
+            ),
+            ViewMode::new(
+                ViewModeDomain::WaveletView,
+                WaveletType::Morlet,
+                ComplexResultMode::Phase,
+            ),
+            ViewMode::new(
+                ViewModeDomain::WaveletView,
+                WaveletType::Morlet,
+                ComplexResultMode::Magnitude,
+            ),
+            ViewMode::new(
+                ViewModeDomain::FourierView,
+                Default::default(),
+                ComplexResultMode::Phase,
+            ),
         ];
-        let settings = Arc::new(GlobalSettings::new(
-            SemiAtomicRect::new((0, 0), (1, 1), (1, 1)),
-            AtomicBool::new(false),
-        ));
+        let settings = Arc::new(GlobalSettings::default());
         // let (mut views_gui, mut views_backend) : ([TTViewGUI; 4], [TTViewBackend; 4]) =
         let [(g1,b1),(g2,b2),(g3,b3),(g4,b4)] //: [(TTViewGUI, TTViewBackend); 4] 
         = default_view_params.map( |x| tt_view_new("TTParams",x, ctx,settings.clone()));
@@ -481,15 +581,13 @@ impl TTStateGUI
 
         let changed = Arc::new((Mutex::new(false), Condvar::new()));
         let stop_flag = Arc::new(AtomicBool::new(false));
-        let frames = Arc::new(AtomicUsize::new(0));
         TTStateGUI {
             views :          [g1, g2, g3, g4],
             changed :        changed.clone(),
             stop_flag :      stop_flag.clone(),
             file :           TTFileGUI {
-                frames : frames.clone(),
-                state :  state.clone(),
-                path :   path_gui,
+                state : state.clone(),
+                path :  path_gui,
             },
             settings :       settings.clone(),
             backend_handle : Some(thread::spawn(move || {
@@ -497,7 +595,6 @@ impl TTStateGUI
                     [b1, b2, b3, b4],
                     changed,
                     stop_flag,
-                    frames,
                     state,
                     path_backend,
                     settings.clone(),
@@ -565,37 +662,10 @@ impl TTStateGUI
                         self.file
                             .state
                             .store(FileState::ProcessingFourier, Ordering::Relaxed);
-                        let frames = self.file.frames.load(Ordering::Relaxed);
                         //enable views generation
                         self.views.iter_mut().for_each(|view| {
-                            let mut params = (*view.params.input_buffer()).clone();
-                            match params
-                            {
-                                WaveletView(mut tparams) =>
-                                {
-                                    tparams.scale.max = frames;
-                                    tparams.scale.val = 1;
-                                    tparams.scale.min = 1;
-                                    tparams.time.max = tparams.scale.max - tparams.scale.val;
-                                    params = WaveletView(tparams)
-                                }
-                                TimeView(mut tparams) =>
-                                {
-                                    tparams.time.max = frames - 1;
-                                    params = TimeView(tparams);
-                                }
-                                FourierView(mut tparams) =>
-                                {
-                                    tparams.freq.max = frames / 2;
-                                    params = FourierView(tparams);
-                                }
-                            }
-                            //update backend buffer
-                            *view.params.input_buffer() = params;
-                            view.params.publish();
-                            //update gui working buffer
-                            *view.params.input_buffer() = params;
                             view.state.store(TTViewState::Changed, Ordering::Relaxed);
+                            *view.view_mode.position.write() = [0, 0, 0, 0, 0].into_dimension();
                         });
                         self.notify_backend();
                         ui.label(path.path());
@@ -643,6 +713,7 @@ impl TTStateGUI
                     changed = true;
                     self.settings.changed(true);
                 }
+                changed |= atomicCombobox!(self.settings.select_mode, ui);
             });
             let available_height = ui.available_height() / 2.0;
             let available_width = ui.available_width() / 2.0;

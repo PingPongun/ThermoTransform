@@ -1,30 +1,31 @@
-use egui::{ColorImage, TextureOptions};
-use ndarray::{s, ArrayView2};
-use ndarray_ndimage::{convolve, BorderMode};
-use parking_lot::{Condvar, Mutex};
-use rayon::prelude::{IntoParallelIterator, ParallelExtend};
-use rayon::slice::ParallelSliceMut;
-use std::f64::consts::{FRAC_1_PI, PI};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
-use triple_buffer as tribuf;
-use triple_buffer::triple_buffer;
-
 use crate::cwt::*;
 use crate::tt_common::*;
 use crate::tt_file::TTFile;
 use crate::tt_fourier::TTFourier;
 use crate::wavelet::{WaveletBank, WaveletBankTrait};
-
+use egui::{ColorImage, TextureOptions};
+use ndarray::Axis;
+use ndarray::{s, ArrayView2, IntoDimension};
+use ndarray_ndimage::{convolve, BorderMode};
+use parking_lot::{Condvar, Mutex};
+use rayon::prelude::{IntoParallelIterator, ParallelExtend};
+use rayon::slice::ParallelSliceMut;
+use std::f64::consts::{FRAC_1_PI, PI};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use triple_buffer as tribuf;
+use triple_buffer::triple_buffer;
+use Ordering::Relaxed;
 //=======================================
 //=================Types=================
 //=======================================
 pub struct TTViewBackend
 {
-    pub state :      Arc<AtomicTTViewState>,
-    pub thermogram : tribuf::Input<Thermogram>,
-    pub params :     tribuf::Output<TTViewParams>,
-    pub settings :   Arc<GlobalSettings>,
+    pub state :            Arc<AtomicTTViewState>,
+    pub thermogram :       tribuf::Input<Thermogram>,
+    pub view_mode :        Arc<ViewMode>,
+    pub frozen_view_mode : ViewMode,
+    pub settings :         Arc<GlobalSettings>,
 }
 
 #[derive(Default)]
@@ -36,10 +37,9 @@ struct TTFileBackendData
 }
 struct TTFileBackend
 {
-    frames : Arc<AtomicUsize>,
-    state :  Arc<AtomicFileState>,
-    path :   tribuf::Output<Option<TTFile>>,
-    data :   TTFileBackendData,
+    state : Arc<AtomicFileState>,
+    path :  tribuf::Output<Option<TTFile>>,
+    data :  TTFileBackendData,
 }
 
 pub struct TTStateBackend
@@ -57,9 +57,10 @@ pub struct TTStateBackend
 //=======================================
 impl TTViewBackend
 {
+    fn freeze_view_mode(&mut self) { self.frozen_view_mode = (*self.view_mode).clone(); }
     fn time_view_check_update(&mut self, input_data : &Option<TTInputData>) -> ()
     {
-        if let TimeView(params) = self.params.read()
+        if self.frozen_view_mode.domain.load(Relaxed) == ViewModeDomain::TimeView
         {
             if let Ok(_) = self.state.compare_exchange(
                 TTViewState::Changed,
@@ -70,8 +71,12 @@ impl TTViewBackend
             {
                 if let Some(input) = input_data
                 {
-                    let input_view = input.data.index_axis(Axis::TIME, params.time.val);
-                    let denoise = params.denoise;
+                    let settings_axis = self.frozen_view_mode.get_settings_axes()[0] as usize;
+                    let input_view = input.data.index_axis(
+                        Axis(settings_axis),
+                        self.frozen_view_mode.position.read()[settings_axis],
+                    );
+                    let denoise = self.frozen_view_mode.denoise.load(Relaxed);
                     self.update_image(input_view, TTGradients::Linear, denoise);
                 }
             }
@@ -83,7 +88,7 @@ impl TTViewBackend
         wavelet_bank : &mut WaveletBank,
     ) -> ()
     {
-        if let WaveletView(params) = self.params.read()
+        if self.frozen_view_mode.domain.load(Relaxed) == ViewModeDomain::WaveletView
         {
             if let Ok(_) = self.state.compare_exchange(
                 TTViewState::Changed,
@@ -95,9 +100,9 @@ impl TTViewBackend
                 if let Some(cwt) = lazy_cwt
                 {
                     //calculate & display requested waveletet transform
-                    let cwt_view = cwt.cwt(wavelet_bank, params);
-                    let denoise = params.denoise;
-                    if params.display_mode == ComplexResultMode::Phase
+                    let cwt_view = cwt.cwt(wavelet_bank, &self.frozen_view_mode);
+                    let denoise = self.frozen_view_mode.denoise.load(Relaxed);
+                    if self.frozen_view_mode.display_mode.load(Relaxed) == ComplexResultMode::Phase
                     {
                         self.update_image(cwt_view.view(), TTGradients::Phase, denoise);
                     }
@@ -111,7 +116,7 @@ impl TTViewBackend
     }
     fn fourier_view_check_update(&mut self, fourier : &Option<TTFourier>) -> ()
     {
-        if let FourierView(params) = self.params.read()
+        if self.frozen_view_mode.domain.load(Relaxed) == ViewModeDomain::FourierView
         {
             if let Ok(_) = self.state.compare_exchange(
                 TTViewState::Changed,
@@ -122,9 +127,9 @@ impl TTViewBackend
             {
                 if let Some(fourier) = fourier
                 {
-                    let snapshot = fourier.snapshot(params);
-                    let denoise = params.denoise;
-                    if params.display_mode == ComplexResultMode::Phase
+                    let snapshot = fourier.snapshot(&self.frozen_view_mode);
+                    let denoise = self.frozen_view_mode.denoise.load(Relaxed);
+                    if self.frozen_view_mode.display_mode.load(Relaxed) == ComplexResultMode::Phase
                     {
                         self.update_image(snapshot.view(), TTGradients::Phase, denoise);
                     }
@@ -143,6 +148,15 @@ impl TTViewBackend
         denoise : bool,
     ) -> ()
     {
+        let view_axes = self.frozen_view_mode.get_view_axes();
+        let array = if view_axes[0] > view_axes[1]
+        {
+            array.t().reborrow()
+        }
+        else
+        {
+            array.reborrow()
+        };
         let array_base;
         let array = if denoise
         {
@@ -156,14 +170,15 @@ impl TTViewBackend
         {
             array.reborrow()
         };
-        let array_roi = array.slice(s![
-            self.settings.roi.min.get().x as usize..=self.settings.roi.max.get().x as usize,
-            self.settings.roi.min.get().y as usize..=self.settings.roi.max.get().y as usize,
-        ]);
+        let roi_min_x = self.settings.roi_min.read()[view_axes[0] as usize];
+        let roi_min_y = self.settings.roi_min.read()[view_axes[1] as usize];
+        let roi_max_x = self.settings.roi_max.read()[view_axes[0] as usize];
+        let roi_max_y = self.settings.roi_max.read()[view_axes[1] as usize];
+        let array_roi = array.slice(s![roi_min_x..=roi_max_x, roi_min_y..=roi_max_y,]);
         let array_iter;
         let mut array_vec;
         let image_dim;
-        if self.settings.roi_zoom.load(Ordering::Relaxed) == false
+        if self.settings.roi_zoom.load(Relaxed) == false
         {
             let roi_len = array_roi.len();
             let non_roi_len = array.len() - roi_len;
@@ -262,14 +277,9 @@ impl TTViewBackend
 }
 impl TTFileBackend
 {
-    pub fn new(
-        frames : Arc<AtomicUsize>,
-        state : Arc<AtomicFileState>,
-        path : tribuf::Output<Option<TTFile>>,
-    ) -> Self
+    pub fn new(state : Arc<AtomicFileState>, path : tribuf::Output<Option<TTFile>>) -> Self
     {
         Self {
-            frames,
             state,
             path,
             data : Default::default(),
@@ -282,7 +292,6 @@ impl TTStateBackend
         views : [TTViewBackend; 4],
         changed : Arc<(Mutex<bool>, Condvar)>,
         stop_flag : Arc<AtomicBool>,
-        frames : Arc<AtomicUsize>,
         state : Arc<AtomicFileState>,
         path : tribuf::Output<Option<TTFile>>,
         settings : Arc<GlobalSettings>,
@@ -292,7 +301,7 @@ impl TTStateBackend
             views,
             changed,
             stop_flag,
-            file : TTFileBackend::new(frames, state, path),
+            file : TTFileBackend::new(state, path),
             wavelet_bank : WaveletBank::new_wb(),
             settings,
         }
@@ -312,9 +321,9 @@ impl TTStateBackend
     pub fn run(mut self) -> ()
     {
         let mut exec_time = ExecutionTimeMeas::new("exec_time.txt");
-        while self.stop_flag.load(Ordering::Relaxed) == false
+        while self.stop_flag.load(Relaxed) == false
         {
-            match self.file.state.load(Ordering::Relaxed)
+            match self.file.state.load(Relaxed)
             {
                 FileState::None | FileState::Error =>
                 {
@@ -356,20 +365,32 @@ impl TTStateBackend
                         if let Some(input) = &self.file.data.input_data
                         {
                             //file loaded correctly
-                            self.file
-                                .frames
-                                .store(input.frames as usize, Ordering::Relaxed);
-                            let size = Point {
-                                x : input.width as u16,
-                                y : input.height as u16,
-                            };
-                            let min = Point {
-                                x : size.x / 8,
-                                y : size.y / 8,
-                            };
-                            self.settings.roi.min.set(min.x, min.y);
-                            self.settings.roi.max.set(min.x * 7, min.y * 7);
-                            self.settings.roi.full_size.set(size.x, size.y);
+                            let mut size = self.settings.full_size.write();
+                            *size = [
+                                input.width - 1,
+                                input.height - 1,
+                                input.frames - 1,
+                                input.frames - 1,
+                                input.frames / 2,
+                            ]
+                            .into_dimension();
+                            *self.settings.roi_min.write() = [
+                                size[0] / 8,
+                                size[1] / 8,
+                                size[2] / 8,
+                                size[3] / 8,
+                                size[4] / 8,
+                            ]
+                            .into_dimension();
+                            *self.settings.roi_max.write() = [
+                                7 * size[0] / 8,
+                                7 * size[1] / 8,
+                                7 * size[2] / 8,
+                                7 * size[3] / 8,
+                                7 * size[4] / 8,
+                            ]
+                            .into_dimension();
+                            *self.settings.crossection.write() = [0, 0, 0, 0, 0].into_dimension();
 
                             let _ = self.file.state.compare_exchange(
                                 FileState::Loading,
@@ -401,12 +422,12 @@ impl TTStateBackend
                         rayon::join(
                             || {
                                 //continously update time views if necessary
-                                while FileState::ProcessingFourier
-                                    == self.file.state.load(Ordering::Relaxed)
-                                    && self.stop_flag.load(Ordering::Relaxed) == false
+                                while FileState::ProcessingFourier == self.file.state.load(Relaxed)
+                                    && self.stop_flag.load(Relaxed) == false
                                 {
                                     for view in &mut self.views
                                     {
+                                        view.freeze_view_mode();
                                         view.time_view_check_update(&self.file.data.input_data);
                                     }
                                 }
@@ -442,12 +463,12 @@ impl TTStateBackend
                         rayon::join(
                             || {
                                 //continously update time views if necessary
-                                while FileState::ProcessingWavelet
-                                    == self.file.state.load(Ordering::Relaxed)
-                                    && self.stop_flag.load(Ordering::Relaxed) == false
+                                while FileState::ProcessingWavelet == self.file.state.load(Relaxed)
+                                    && self.stop_flag.load(Relaxed) == false
                                 {
                                     for view in &mut self.views
                                     {
+                                        view.freeze_view_mode();
                                         view.time_view_check_update(&self.file.data.input_data);
                                         view.fourier_view_check_update(&self.file.data.fourier);
                                     }
@@ -482,11 +503,12 @@ impl TTStateBackend
                     rayon::join(
                         || {
                             //continously update time views if necessary
-                            while FileState::ReadySaving == self.file.state.load(Ordering::Relaxed)
-                                && self.stop_flag.load(Ordering::Relaxed) == false
+                            while FileState::ReadySaving == self.file.state.load(Relaxed)
+                                && self.stop_flag.load(Relaxed) == false
                             {
                                 for view in &mut self.views
                                 {
+                                    view.freeze_view_mode();
                                     view.time_view_check_update(&self.file.data.input_data);
                                     view.wavelet_view_check_update(
                                         &self.file.data.lazy_cwt,
@@ -519,6 +541,7 @@ impl TTStateBackend
                 {
                     for view in &mut self.views
                     {
+                        view.freeze_view_mode();
                         view.time_view_check_update(&self.file.data.input_data);
                         view.wavelet_view_check_update(
                             &self.file.data.lazy_cwt,

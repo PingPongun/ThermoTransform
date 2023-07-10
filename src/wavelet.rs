@@ -1,5 +1,12 @@
+use atomic_enum::atomic_enum;
 use mathru::analysis::interpolation::spline::*;
 use num_complex::Complex64;
+use rayon::prelude::{
+    IndexedParallelIterator,
+    IntoParallelIterator,
+    IntoParallelRefMutIterator,
+    ParallelIterator,
+};
 use std::collections::HashMap;
 use std::f64::consts::PI;
 use strum_macros::{EnumString, EnumVariantNames};
@@ -204,35 +211,47 @@ impl WaveletParams
 {
     pub fn get_poly_wise(&mut self, scale : usize) -> PolyWiseComplex
     {
-        if self.wavelets.len() < scale
+        if self.wavelets.len() <= scale
         {
-            self.wavelets.resize(scale, None);
+            self.wavelets.resize(scale + 1, None);
         }
-        if let Some(poly_wise) = self.wavelets[scale - 1].clone()
+        if let Some(poly_wise) = self.wavelets[scale].clone()
         {
             return poly_wise;
         }
         else
         {
-            let poly_wise = PolyWiseComplex::new(self.func, scale, 0.1); //TODO check time step
-            self.wavelets[scale - 1] = Some(poly_wise.clone());
+            let poly_wise = PolyWiseComplex::new(self.func, scale + 1, 0.1); //TODO check time step
+            self.wavelets[scale] = Some(poly_wise.clone());
             return poly_wise;
         }
     }
+    pub fn uget_poly_wise(&self, scale : usize) -> PolyWiseComplex
+    {
+        self.wavelets[scale].clone().unwrap()
+    }
+    pub fn batch_calc(&mut self, scale : usize)
+    {
+        if self.wavelets.len() <= scale
+        {
+            self.wavelets.resize(scale + 1, None);
+        }
+
+        self.wavelets
+            .par_iter_mut()
+            .zip((0..scale as u16).into_par_iter())
+            .for_each(|(w, s)| {
+                if None == *w
+                {
+                    let poly_wise = PolyWiseComplex::new(self.func, s as usize + 1, 0.1); //TODO check time step
+                    *w = Some(poly_wise.clone());
+                }
+            })
+    }
 }
 
-#[derive(
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    Debug,
-    Default,
-    strum_macros::AsRefStr,
-    EnumString,
-    EnumVariantNames,
-)]
+#[atomic_enum]
+#[derive(PartialEq, Eq, Hash, Default, strum_macros::AsRefStr, EnumString, EnumVariantNames)]
 #[strum(serialize_all = "title_case")]
 pub enum WaveletType
 {

@@ -77,7 +77,7 @@ impl TTFourier
         let mut fourier = TTFourier {
             data : Array3::zeros(shape_raw),
             time_len,
-            time_len_wo_padding : input.frames,
+            time_len_wo_padding : input.frames as u32,
         };
         ndfft_r2c_par(&input.data, &mut fourier.data, &mut fft_handler, 2);
 
@@ -91,11 +91,24 @@ impl TTFourier
         }
     }
 
-    pub fn snapshot(&self, params : &FourierViewParams) -> Array2<f64>
+    pub fn snapshot(&self, params : &ViewMode) -> Array2<f64>
     {
-        let freq_view = self.data.index_axis(Axis::TIME, params.freq.val);
+        let settings_axis = params.get_settings_axes()[0] as usize;
+        let freq_view = self.data.index_axis(
+            ndarray::Axis(
+                if settings_axis == TTAxis::F as usize
+                {
+                    2
+                }
+                else
+                {
+                    settings_axis
+                },
+            ),
+            params.position.read()[settings_axis],
+        );
         //convert to requested format
-        match params.display_mode
+        match params.display_mode.load(Ordering::Relaxed)
         {
             ComplexResultMode::Phase => freq_view.map(|x| x.arg()), //radians
             ComplexResultMode::Magnitude => freq_view.map(|x| x.norm()),

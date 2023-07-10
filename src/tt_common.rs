@@ -1,10 +1,11 @@
 use atomic_enum::atomic_enum;
+use egui::mutex::RwLock;
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 use lazy_static::*;
-use ndarray::Array3;
-use static_assertions::assert_eq_align;
-use static_assertions::assert_eq_size;
+use ndarray::{Array3, Ix5};
 
+use crate::wavelet::AtomicWaveletType;
+use crate::wavelet::WaveletType;
 #[cfg(feature = "time_meas")]
 use std::fs::File;
 #[cfg(feature = "time_meas")]
@@ -12,14 +13,13 @@ use std::io::BufWriter;
 #[cfg(feature = "time_meas")]
 use std::io::Write;
 use std::iter;
-use std::mem::ManuallyDrop;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use strum::VariantNames;
 use strum_macros::{EnumString, EnumVariantNames};
-
-use crate::wavelet::WaveletType;
+use Ordering::Relaxed;
 
 //=======================================
 //=================Types=================
@@ -39,6 +39,37 @@ pub enum FileState
     Ready,
     Error,
 }
+#[derive(Clone, Copy, PartialEq, PartialOrd)]
+pub enum TTAxis
+{
+    X = 0,
+    Y = 1,
+    T = 2,
+    S = 3,
+    F = 4,
+}
+
+#[atomic_enum]
+#[derive(
+    PartialEq, strum_macros::IntoStaticStr, strum_macros::AsRefStr, EnumString, EnumVariantNames,
+)]
+#[strum(serialize_all = "title_case")]
+pub enum ViewModeDomain
+{
+    TimeView    = 0,
+    FourierView = 1,
+    WaveletView = 2,
+}
+pub struct ViewMode
+{
+    pub domain :        AtomicViewModeDomain,
+    pub position :      RwLock<Ix5>,
+    pub bind_position : AtomicBool,
+    pub mode_counter :  AtomicUsize,
+    pub wavelet :       AtomicWaveletType,
+    pub display_mode :  AtomicComplexResultMode,
+    pub denoise :       AtomicBool,
+}
 
 pub mod Axis
 {
@@ -46,12 +77,9 @@ pub mod Axis
     pub const TIME : ndarray::Axis = ndarray::Axis(2);
     pub const HEIGHT : ndarray::Axis = ndarray::Axis(1);
     pub const WIDTH : ndarray::Axis = ndarray::Axis(0);
-    pub const S_HEIGHT : ndarray::Axis = ndarray::Axis(1);
-    pub const S_WIDTH : ndarray::Axis = ndarray::Axis(0);
 }
-#[derive(
-    Clone, Copy, PartialEq, Debug, Default, strum_macros::AsRefStr, EnumString, EnumVariantNames,
-)]
+#[atomic_enum]
+#[derive(PartialEq, Default, strum_macros::AsRefStr, EnumString, EnumVariantNames)]
 #[strum(serialize_all = "title_case")]
 pub enum ComplexResultMode
 {
@@ -75,27 +103,26 @@ pub struct Point<X, Y>
     pub x : X,
     pub y : Y,
 }
-pub union AtomicPoint
-{
-    atomic : ManuallyDrop<AtomicU32>,
-    simple : u32,
-    split :  (u16, u16),
-    point :  Point<u16, u16>,
-}
-assert_eq_size!(AtomicPoint, u32);
-assert_eq_align!(AtomicPoint, u32);
 
-pub struct SemiAtomicRect
+#[atomic_enum]
+#[derive(PartialEq, Default, strum_macros::AsRefStr, EnumString, EnumVariantNames)]
+#[strum(serialize_all = "title_case")]
+pub enum SelectMode
 {
-    pub min :       AtomicPoint,
-    pub max :       AtomicPoint,
-    pub full_size : AtomicPoint,
+    RoiMin,
+    RoiMax,
+    #[default]
+    Crossection,
 }
 pub struct GlobalSettings
 {
-    pub roi :      SemiAtomicRect,
-    pub roi_zoom : AtomicBool,
-    changed :      AtomicBool,
+    pub roi_min :     RwLock<Ix5>,
+    pub roi_max :     RwLock<Ix5>,
+    pub crossection : RwLock<Ix5>,
+    pub full_size :   RwLock<Ix5>,
+    pub roi_zoom :    AtomicBool,
+    pub select_mode : AtomicSelectMode,
+    changed :         AtomicBool,
 }
 #[atomic_enum]
 #[derive(PartialEq)]
@@ -120,46 +147,6 @@ pub enum TTGradients
     Linear,
     Phase,
 }
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
-pub struct WaveletViewParams
-{
-    pub scale :        RangedVal,
-    pub time :         RangedVal,
-    pub wavelet :      WaveletType,
-    pub display_mode : ComplexResultMode,
-    pub denoise :      bool,
-}
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
-pub struct TimeViewParams
-{
-    pub time :    RangedVal,
-    pub denoise : bool,
-}
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
-pub struct FourierViewParams
-{
-    pub freq :         RangedVal,
-    pub display_mode : ComplexResultMode,
-    pub denoise :      bool,
-}
-
-#[derive(
-    Clone,
-    Copy,
-    PartialEq,
-    Debug,
-    strum_macros::IntoStaticStr,
-    strum_macros::AsRefStr,
-    EnumVariantNames,
-)]
-#[strum(serialize_all = "title_case")]
-pub enum TTViewParams
-{
-    WaveletView(WaveletViewParams),
-    TimeView(TimeViewParams),
-    FourierView(FourierViewParams),
-}
-pub use TTViewParams::*;
 
 pub struct ExecutionTimeMeas
 {
@@ -171,9 +158,9 @@ pub struct ExecutionTimeMeas
 #[derive(PartialEq)]
 pub struct TTInputData
 {
-    pub frames : u32,
-    pub width :  u32,
-    pub height : u32,
+    pub frames : usize,
+    pub width :  usize,
+    pub height : usize,
     pub data :   Array3<f64>,
 }
 //=======================================
@@ -194,60 +181,93 @@ where
 {
     fn update(&mut self, new_val : &str) { *self = T::from_str(new_val).unwrap(); }
 }
-impl EnumUpdate<TTViewParams> for TTViewParams
-{
-    fn update(&mut self, new_val : &str)
-    {
-        let timeview : &'static str = Self::time_default().into();
-        let waveletview : &'static str = Self::wavelet_default().into();
-        let fourierview : &'static str = Self::fourier_default().into();
-        let frames;
-        let denoise;
-        let display_mode;
-        match self
-        {
-            FourierView(params) =>
-            {
-                frames = params.freq.max * 2; //TODO FIX
-                display_mode = params.display_mode;
-                denoise = params.denoise;
-            }
-            TimeView(params) =>
-            {
-                frames = params.time.max + 1;
-                display_mode = Default::default();
-                denoise = params.denoise;
-            }
-            WaveletView(params) =>
-            {
-                frames = params.scale.max;
-                display_mode = params.display_mode;
-                denoise = params.denoise;
-            }
-        };
-        if timeview == new_val
-        {
-            *self = Self::time_frames(frames, denoise)
-        }
-        else if waveletview == new_val
-        {
-            *self = Self::wavelet_frames(frames, denoise, display_mode)
-        }
-        else if fourierview == new_val
-        {
-            *self = Self::fourier_frames(frames, denoise, display_mode)
-        }
-        else
-        {
-            unreachable!()
-        }
-    }
-}
 
 //=======================================
 //============Implementations============
 //=======================================
+impl Into<char> for TTAxis
+{
+    fn into(self) -> char
+    {
+        const ttaxis_char : [char; 5] = ['X', 'Y', 't', 's', 'f'];
+        ttaxis_char[self as usize]
+    }
+}
+impl Into<&str> for TTAxis
+{
+    fn into(self) -> &'static str
+    {
+        const ttaxis_char : [&str; 5] = ["| X:", "| Y:", "| frame:", "| scale:", "| freq:"];
+        ttaxis_char[self as usize]
+    }
+}
+impl Clone for ViewMode
+{
+    fn clone(&self) -> Self
+    {
+        Self {
+            domain :        AtomicViewModeDomain::new(self.domain.load(Relaxed)),
+            position :      RwLock::new(*self.position.read()),
+            bind_position : AtomicBool::new(self.bind_position.load(Relaxed)),
+            mode_counter :  AtomicUsize::new(self.mode_counter.load(Relaxed)),
+            wavelet :       AtomicWaveletType::new(self.wavelet.load(Relaxed)),
+            display_mode :  AtomicComplexResultMode::new(self.display_mode.load(Relaxed)),
+            denoise :       AtomicBool::new(self.denoise.load(Relaxed)),
+        }
+    }
+}
+mod tt_axis
+{
+    use super::*;
+    use TTAxis::*;
 
+    impl ViewMode
+    {
+        pub const ViewModeAxes : [&[([TTAxis; 2], &'static [TTAxis])]; 3] = [
+            &[([X, Y], &[T]), ([X, T], &[Y]), ([T, Y], &[X])], /*time*/
+            &[([X, Y], &[F]), ([X, F], &[Y]), ([F, Y], &[X])], /*fourier*/
+            &[
+                ([X, Y], &[T, S]),
+                ([X, T], &[Y, S]),
+                ([X, S], &[T, Y]),
+                ([T, Y], &[X, S]),
+                ([S, Y], &[T, X]),
+                ([T, S], &[X, Y]),
+            ], /*wavelet*/
+        ];
+    }
+}
+impl ViewMode
+{
+    pub fn new(
+        domain : ViewModeDomain,
+        wavelet : WaveletType,
+        display_mode : ComplexResultMode,
+    ) -> Self
+    {
+        Self {
+            domain :        AtomicViewModeDomain::new(domain),
+            position :      Default::default(),
+            bind_position : Default::default(),
+            mode_counter :  Default::default(),
+            wavelet :       AtomicWaveletType::new(wavelet),
+            display_mode :  AtomicComplexResultMode::new(display_mode),
+            denoise :       Default::default(),
+        }
+    }
+    pub fn get_view_axes(&self) -> [TTAxis; 2]
+    {
+        Self::ViewModeAxes[self.domain.load(Ordering::Relaxed) as usize]
+            [self.mode_counter.load(Ordering::Relaxed)]
+        .0
+    }
+    pub fn get_settings_axes(&self) -> &[TTAxis]
+    {
+        Self::ViewModeAxes[self.domain.load(Ordering::Relaxed) as usize]
+            [self.mode_counter.load(Ordering::Relaxed)]
+        .1
+    }
+}
 impl Default for RangedVal
 {
     fn default() -> Self
@@ -259,65 +279,24 @@ impl Default for RangedVal
         }
     }
 }
-impl AtomicPoint
+
+impl Default for GlobalSettings
 {
-    ///`val`- (x,y)
-    pub fn set(&self, x : u16, y : u16)
-    {
-        unsafe {
-            self.atomic.store(
-                AtomicPoint {
-                    point : Point { x : x, y : y },
-                }
-                .simple,
-                Ordering::Relaxed,
-            );
-        }
-    }
-    pub fn get(&self) -> Point<u16, u16>
-    {
-        unsafe {
-            AtomicPoint {
-                simple : self.atomic.load(Ordering::Relaxed),
-            }
-            .point
-        }
-    }
-}
-impl SemiAtomicRect
-{
-    pub fn new(min : (u16, u16), max : (u16, u16), full : (u16, u16)) -> Self
+    fn default() -> Self
     {
         Self {
-            min :       AtomicPoint { split : min },
-            max :       AtomicPoint { split : max },
-            full_size : AtomicPoint { split : full },
+            roi_min :     Default::default(),
+            roi_max :     Default::default(),
+            crossection : Default::default(),
+            full_size :   Default::default(),
+            roi_zoom :    Default::default(),
+            select_mode : AtomicSelectMode::new(Default::default()),
+            changed :     Default::default(),
         }
     }
-
-    pub fn set(&self, x : u16, y : u16, min : bool)
-    {
-        let (mut x, mut y) = (x, y);
-        let full = self.full_size.get();
-        x = x.clamp(0, full.x - 1);
-        y = y.clamp(0, full.y - 1);
-        let other = if min { self.min.get() } else { self.max.get() };
-        self.min.set(u16::min(x, other.x), u16::min(y, other.y));
-        self.max.set(u16::max(x, other.x), u16::max(y, other.y));
-    }
 }
-
 impl GlobalSettings
 {
-    pub fn new(roi : SemiAtomicRect, roi_zoom : AtomicBool) -> Self
-    {
-        Self {
-            roi,
-            roi_zoom,
-            changed : AtomicBool::new(false),
-        }
-    }
-
     pub fn changed(&self, set : bool) -> bool { self.changed.swap(set, Ordering::Relaxed) }
 }
 impl Thermogram
@@ -437,95 +416,13 @@ impl TTGradients
     }
 }
 
-impl TTViewParams
-{
-    pub fn time_default() -> Self
-    {
-        TimeView(TimeViewParams {
-            time :    Default::default(),
-            denoise : true,
-        })
-    }
-    pub fn fourier_default() -> Self
-    {
-        FourierView(FourierViewParams {
-            freq :         Default::default(),
-            display_mode : Default::default(),
-            denoise :      true,
-        })
-    }
-    pub fn wavelet_default() -> Self
-    {
-        WaveletView(WaveletViewParams {
-            scale :        Default::default(),
-            time :         Default::default(),
-            wavelet :      Default::default(),
-            display_mode : Default::default(),
-            denoise :      true,
-        })
-    }
-    pub fn time_frames(frames : usize, denoise : bool) -> Self
-    {
-        TimeView(TimeViewParams {
-            time : RangedVal {
-                val : 0,
-                min : 0,
-                max : frames - 1,
-            },
-            denoise,
-        })
-    }
-    pub fn fourier_frames(frames : usize, denoise : bool, display_mode : ComplexResultMode)
-        -> Self
-    {
-        FourierView(FourierViewParams {
-            freq : RangedVal {
-                val : 0,
-                min : 0,
-                max : frames / 2,
-            },
-            display_mode,
-            denoise,
-        })
-    }
-    pub fn wavelet_frames(frames : usize, denoise : bool, display_mode : ComplexResultMode)
-        -> Self
-    {
-        WaveletView(WaveletViewParams {
-            time : RangedVal {
-                val : 0,
-                min : 0,
-                max : frames - 1,
-            },
-            scale : RangedVal {
-                val : 1,
-                min : 1,
-                max : frames,
-            },
-            wavelet : Default::default(),
-            display_mode,
-            denoise,
-        })
-    }
-    pub fn wavelet_wavelet(wavelet : WaveletType, mode : ComplexResultMode) -> Self
-    {
-        WaveletView(WaveletViewParams {
-            time : Default::default(),
-            scale : Default::default(),
-            wavelet,
-            display_mode : mode,
-            denoise : true,
-        })
-    }
-}
-
 impl ExecutionTimeMeas
 {
     pub fn new(_file_name : &str) -> Self
     {
         let temp = Instant::now();
         #[cfg(feature = "time_meas")]
-        let f = File::create(_file_name).unwrap();
+        let f = File::create(_file_name).unwrap(); //TODO LP may panic here
         Self {
             last_time : temp,
 
