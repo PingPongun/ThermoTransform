@@ -8,6 +8,7 @@ use ndarray::Axis;
 use ndarray::{s, ArrayView2, IntoDimension};
 use ndarray_ndimage::{convolve, BorderMode};
 use parking_lot::{Condvar, Mutex};
+use rayon::prelude::ParallelIterator;
 use rayon::prelude::{IntoParallelIterator, ParallelExtend};
 use rayon::slice::ParallelSliceMut;
 use std::f64::consts::{FRAC_1_PI, PI};
@@ -99,8 +100,11 @@ impl TTViewBackend
             {
                 if let Some(cwt) = lazy_cwt
                 {
-                    //calculate & display requested waveletet transform
+                    //// calculate & display requested waveletet transform
+                    // let mut exec_time = ExecutionTimeMeas::new("exec_time_cwt.txt");
+                    // exec_time.start();
                     let cwt_view = cwt.cwt(wavelet_bank, &self.frozen_view_mode);
+                    // exec_time.stop_print("cwt: ");
                     let denoise = self.frozen_view_mode.denoise.load(Relaxed);
                     if self.frozen_view_mode.display_mode.load(Relaxed) == ComplexResultMode::Phase
                     {
@@ -110,6 +114,7 @@ impl TTViewBackend
                     {
                         self.update_image(cwt_view.view(), TTGradients::Linear, denoise);
                     };
+                    // exec_time.stop_print("update_image: ");
                 }
             }
         }
@@ -149,27 +154,66 @@ impl TTViewBackend
     ) -> ()
     {
         let view_axes = self.frozen_view_mode.get_view_axes();
-        let array = if view_axes[0] > view_axes[1]
+        let mut array = array.into_owned();
+        if (view_axes[0] == TTAxis::X) ^ (view_axes[1] == TTAxis::Y)
+        //view modes X-t, X-s, t-Y, s-Y
         {
-            array.t().reborrow()
+            //use contrast/normalized values insted of absolute ones
+            if grad == TTGradients::Phase
+            {
+                array
+                    .lanes_mut(Axis(1))
+                    .into_iter()
+                    .into_par_iter()
+                    .for_each(|mut phases| {
+                        let (sum_x, sum_y) =
+                            phases.iter_mut().fold((0., 0.), |(sum_x, sum_y), phase| {
+                                let (sin, cos) = phase.sin_cos();
+                                (sum_x + cos, sum_y + sin)
+                            });
+                        let (sum_x, sum_y) =
+                            (sum_x / phases.len() as f64, sum_y / phases.len() as f64);
+                        let std = 1.0 / (-2.0 * sum_x.hypot(sum_y).clamp(0., 1.).ln()).sqrt();
+                        let mean = sum_y.atan2(sum_x);
+                        phases.iter_mut().for_each(|phase| {
+                            let mut d = *phase - mean;
+                            if d > PI
+                            {
+                                d -= 2.0 * PI;
+                            }
+                            if d < -PI
+                            {
+                                d += 2.0 * PI;
+                            }
+                            *phase = d * std;
+                        })
+                    });
+            }
+            else
+            {
+                array
+                    .lanes_mut(Axis(1))
+                    .into_iter()
+                    .into_par_iter()
+                    .for_each(|mut x| {
+                        let std = 1.0 / x.std(0.0);
+                        let mean = x.mean().unwrap_or(0.0);
+                        x.iter_mut().for_each(|x| *x = (*x - mean) * std)
+                    });
+            }
         }
-        else
+        if view_axes[0] > view_axes[1]
         {
-            array.reborrow()
-        };
-        let array_base;
-        let array = if denoise
+            array = array.reversed_axes();
+        }
+        if denoise
         {
             //low pass filtring
             let filter =
                 ndarray::arr2(&[[0.05_f64, 0.1, 0.05], [0.1, 0.4, 0.1], [0.05, 0.1, 0.05]]);
-            array_base = convolve(&array.reborrow(), &filter.view(), BorderMode::Reflect, 0);
-            array_base.view()
+            array = convolve(&array, &filter, BorderMode::Reflect, 0);
         }
-        else
-        {
-            array.reborrow()
-        };
+
         let roi_min_x = self.settings.roi_min.read()[view_axes[0] as usize];
         let roi_min_y = self.settings.roi_min.read()[view_axes[1] as usize];
         let roi_max_x = self.settings.roi_max.read()[view_axes[0] as usize];
@@ -184,7 +228,7 @@ impl TTViewBackend
             let non_roi_len = array.len() - roi_len;
             //replicate roi pixels `roi_mul`-1 times to ensure that roi pixels occurs(in histogram) as if roi spans above at least 70% of image
             let roi_mul = (7.0 / 3.0 * non_roi_len as f64 / roi_len as f64).ceil() as usize;
-            array_iter = array.t().into_iter().cloned();
+            array_iter = array.t().into_iter();
 
             array_vec = Vec::with_capacity(non_roi_len + roi_len * roi_mul + 2);
             array_vec.par_extend(array.into_par_iter());
@@ -198,7 +242,7 @@ impl TTViewBackend
         {
             let roi_len = array_roi.len();
             array_vec = Vec::with_capacity(roi_len + 2);
-            array_iter = array_roi.t().into_iter().cloned();
+            array_iter = array_roi.t().into_iter();
             array_vec.par_extend(array_roi.into_par_iter());
             image_dim = [array_roi.dim().0, array_roi.dim().1];
         }
@@ -234,7 +278,8 @@ impl TTViewBackend
             })
             .collect();
         let rgb = array_iter
-            .map(|x| {
+            // .into_par_iter()
+            .map(|&x| {
                 let color;
                 match gram.scale.binary_search_by(|a| a.partial_cmp(&x).unwrap())
                 {
