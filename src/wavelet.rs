@@ -207,7 +207,7 @@ impl PolyWiseComplex
 {
     pub fn new(func : &dyn Fn(&f64, &f64) -> (f64, f64), scale : usize, time_step : f64) -> Self
     {
-        let init_calc_half_len = scale * 60;
+        let init_calc_half_len = 20 + scale * 6;
         let x_iter = (-(init_calc_half_len as isize)..=(init_calc_half_len as isize)).into_iter();
         let x_isize : Vec<isize> = x_iter.clone().collect();
         let x : Vec<f64> = x_iter.map(|x| (x as f64) * time_step).collect();
@@ -241,7 +241,7 @@ impl WaveletParams
         }
         else
         {
-            let poly_wise = PolyWiseComplex::new(self.func, scale + 1, 0.1); //TODO check time step
+            let poly_wise = PolyWiseComplex::new(self.func, scale + 1, 1.0);
             self.wavelets[scale] = Some(poly_wise.clone());
             return poly_wise;
         }
@@ -263,7 +263,7 @@ impl WaveletParams
             .for_each(|(w, s)| {
                 if None == *w
                 {
-                    let poly_wise = PolyWiseComplex::new(self.func, s as usize + 1, 0.1); //TODO check time step
+                    let poly_wise = PolyWiseComplex::new(self.func, s as usize + 1, 1.0);
                     *w = Some(poly_wise.clone());
                 }
             })
@@ -277,6 +277,11 @@ pub enum WaveletType
 {
     #[default]
     Morlet,
+    Shannon,
+    Modified_Shannon,
+    BSpline_2,
+    Poisson_1,
+    Poisson_2,
 }
 use WaveletType::*;
 // pub struct WaveletBank(HashMap<WaveletType, WaveletParams>);
@@ -289,23 +294,99 @@ impl WaveletBankTrait for WaveletBank
 {
     fn new_wb() -> Self
     {
-        HashMap::from([(
-            Morlet,
-            WaveletParams {
-                func :     &morlet_wavelet_func,
-                wavelets : Vec::new(),
-            },
-        )])
+        HashMap::from([
+            (
+                Morlet,
+                WaveletParams {
+                    func :     &morlet_wavelet_func,
+                    wavelets : Vec::new(),
+                },
+            ),
+            (
+                Shannon,
+                WaveletParams {
+                    func :     &shannon_wavelet_func,
+                    wavelets : Vec::new(),
+                },
+            ),
+            (
+                Modified_Shannon,
+                WaveletParams {
+                    func :     &shannon_mod_wavelet_func,
+                    wavelets : Vec::new(),
+                },
+            ),
+            (
+                BSpline_2,
+                WaveletParams {
+                    func :     &b_spline_wavelet_func_2,
+                    wavelets : Vec::new(),
+                },
+            ),
+            (
+                Poisson_1,
+                WaveletParams {
+                    func :     &poisson_wavelet_func_1,
+                    wavelets : Vec::new(),
+                },
+            ),
+            (
+                Poisson_2,
+                WaveletParams {
+                    func :     &poisson_wavelet_func_2,
+                    wavelets : Vec::new(),
+                },
+            ),
+        ])
     }
 }
 
 fn morlet_wavelet_func(t : &f64, s : &f64) -> (f64, f64)
 {
-    let fb = s * 0.25; //=sigma^2 /8
-    let fc = (2.0 / 2_f64.ln()).sqrt() / s;
     let ret = Complex64::new(
-        (1.0 / (PI * fb).sqrt()) * (-1.0 * (t).powi(2) / fb).exp(),
+        (2.0 / (PI * s).sqrt()) * (-4.0 * (t / s).powi(2)).exp(),
         0.0,
-    ) * Complex64::new(0.0, 2.0 * PI * t * fc).exp();
+    ) * Complex64::new(0.0, 8.0 * t / s).exp();
     (ret.re, ret.im)
+}
+#[inline(always)]
+fn b_spline_wavelet_func_inner(t : &f64, s : &f64, p : &i32, fb : &f64) -> (f64, f64)
+{
+    let fbt = fb * t / s;
+    let sinc = if fbt == 0. { 1. } else { fbt.sin() / fbt };
+    let ret = Complex64::new((0.5 / (s).sqrt()) * sinc.powi(*p), 0.0)
+        * Complex64::new(0.0, 4.0 * t / s).exp();
+    (ret.re, ret.im)
+}
+
+fn b_spline_wavelet_func_2(t : &f64, s : &f64) -> (f64, f64)
+{
+    b_spline_wavelet_func_inner(t, s, &2, &4.)
+}
+fn shannon_wavelet_func(t : &f64, s : &f64) -> (f64, f64)
+{
+    b_spline_wavelet_func_inner(t, s, &1, &8.)
+}
+fn shannon_mod_wavelet_func(t : &f64, s : &f64) -> (f64, f64)
+{
+    let shannon = shannon_wavelet_func(t, s);
+    let gauss = (-0.1 * (t / s).powi(2)).exp();
+    (shannon.0 * gauss, shannon.1 * gauss)
+}
+#[inline(always)]
+fn poisson_wavelet_func_inner(t : &f64, s : &f64, m : &i32, sc : &f64) -> (f64, f64)
+{
+    let a = 0.5 / PI / (s).sqrt();
+    let ret = a * Complex64::new(1.0, -sc * t / s).powi(-1 - *m);
+    (ret.re, ret.im)
+}
+
+fn poisson_wavelet_func_1(t : &f64, s : &f64) -> (f64, f64)
+{
+    poisson_wavelet_func_inner(t, s, &1, &4.)
+}
+
+fn poisson_wavelet_func_2(t : &f64, s : &f64) -> (f64, f64)
+{
+    poisson_wavelet_func_inner(t, s, &2, &2.)
 }
