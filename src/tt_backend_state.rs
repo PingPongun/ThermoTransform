@@ -254,7 +254,7 @@ impl TTViewBackend
         }
         array_vec
             .as_parallel_slice_mut()
-            .sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+            .sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let quantile_count = (array_vec.len() - 1) as f64 / 32.0;
         let gram = self.thermogram.input_buffer();
         gram.scale.iter_mut().enumerate().for_each(|(idx, val)| {

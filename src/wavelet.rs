@@ -26,99 +26,119 @@ pub struct PolyWiseWavelet
     pub dxpsi : [Point<isize, [f64; 3]>; 2],
     pub d3psi : Vec<Point<isize, f64>>,
 }
+#[inline(always)]
+fn onesided_extremals_search(
+    extvec : &mut Vec<usize>,
+    last_extremal_x : usize,
+    mid_x : usize,
+    y : &[f64],
+    threshold : f64,
+    fn_dist_btw_extremals : impl Fn(usize, usize) -> usize,
+    fn_fake_extremal : impl Fn(usize, usize) -> usize,
+    iter : impl Iterator<Item = usize>,
+)
+{
+    let mut prev_convex = (y[mid_x + 1] - y[mid_x]) < (y[mid_x] - y[mid_x - 1]);
+    let mut prev_concave = (y[mid_x + 1] - y[mid_x]) > (y[mid_x] - y[mid_x - 1]);
+    let mut dist_btw_extremals = usize::MAX >> 1;
+    let mut last_extremal_x = last_extremal_x;
+    let mut below_thresh = false;
+
+    for i in iter
+    {
+        let dyp = y[i + 1] - y[i];
+        let dym = y[i] - y[i - 1];
+        let convex = dyp < dym;
+        let concave = dyp > dym;
+        let mut extr = false;
+        //check for extremes
+        if (y[i + 1] < y[i] && y[i - 1] < y[i])
+            || (y[i + 1] > y[i] && y[i - 1] > y[i])
+            || (concave && prev_convex)
+            || (convex && prev_concave)
+        {
+            extvec.push(i);
+            dist_btw_extremals = fn_dist_btw_extremals(i, last_extremal_x);
+            last_extremal_x = i;
+            extr = true;
+        }
+
+        if fn_dist_btw_extremals(i, last_extremal_x) >> 1 > dist_btw_extremals
+        {
+            //if wavelet is i.e. exponetial(Poisson), there are no extremals, so to obtain correct aproximation we need to add some
+            extvec.push(fn_fake_extremal(last_extremal_x, dist_btw_extremals));
+            last_extremal_x = fn_fake_extremal(last_extremal_x, dist_btw_extremals);
+            extr = true;
+        }
+
+        if extr
+        {
+            if y[*extvec.last().unwrap()].abs() < threshold
+            {
+                if below_thresh && extvec.len() > 5
+                {
+                    //stop iteration if two consecutive extremals are below threshold and ther has been found at least five extremals
+                    break;
+                }
+                else
+                {
+                    below_thresh = true;
+                }
+            }
+            else
+            {
+                below_thresh = false;
+            }
+        }
+        prev_concave = concave;
+        prev_convex = convex;
+    }
+}
 impl PolyWiseWavelet
 {
     pub fn new(x : &[isize], y : &[f64], init_calc_half_len : usize) -> Self
     {
-        // let mut roots = Vec::with_capacity(init_calc_half_len);
+        let glob_max = y.iter().cloned().reduce(|a, b| f64::max(a, b)).unwrap();
+        let mid_x = x.len() >> 1;
+        let threshold = glob_max * 0.025;
+
+        let mut extremals_positive = Vec::with_capacity(init_calc_half_len);
         let mut extremals = Vec::with_capacity(init_calc_half_len);
-        let mut glob_max = f64::NEG_INFINITY;
-        let mut prev_convex = (y[2] - y[1]) < (y[1] - y[0]);
-        let mut prev_concave = (y[2] - y[1]) > (y[1] - y[0]);
-        //check for roots
-        // if y[0] * y[1] <= 0.0
-        // {
-        //     if y[0].abs() < y[1].abs()
-        //     {
-        //         roots.push(0);
-        //     }
-        //     else
-        //     {
-        //         roots.push(1);
-        //     }
-        // }
-        for i in 1..x.len() - 1
+
+        onesided_extremals_search(
+            &mut extremals_positive,
+            0,
+            mid_x,
+            y,
+            threshold,
+            |a, b| a - b,
+            |a, b| a + b,
+            (mid_x..x.len() - 1).into_iter(),
+        );
+        onesided_extremals_search(
+            &mut extremals,
+            usize::MAX,
+            mid_x,
+            y,
+            threshold,
+            |a, b| b - a,
+            |a, b| a - b,
+            (1..=mid_x).into_iter().rev(),
+        );
+
+        if extremals[0] == extremals_positive[0]
         {
-            // //check for roots
-            // if y[i + 1] * y[i] <= 0.0
-            // {
-            //     if y[i + 1].abs() < y[i].abs()
-            //     {
-            //         roots.push(i + 1);
-            //     }
-            //     else
-            //     {
-            //         roots.push(i);
-            //     }
-            // }
-            let dyp = y[i + 1] - y[i];
-            let dym = y[i] - y[i - 1];
-            let convex = dyp < dym;
-            let concave = dyp > dym;
-            //check for extremes
-            if y[i + 1] < y[i] && y[i - 1] < y[i]
-            {
-                extremals.push(i);
-                if glob_max < y[i].abs()
-                {
-                    glob_max = y[i].abs();
-                }
-            }
-            else if y[i + 1] > y[i] && y[i - 1] > y[i]
-            {
-                extremals.push(i);
-                if glob_max < y[i].abs()
-                {
-                    glob_max = y[i].abs();
-                }
-            }
-            else if (concave && prev_convex) || (convex && prev_concave)
-            {
-                //check for inflections
-                extremals.push(i)
-            }
-
-            prev_concave = concave;
-            prev_convex = convex;
+            extremals.reverse();
+            extremals.extend_from_slice(&extremals_positive[1..]);
         }
-        let mut extr_iter = (0..extremals.len()).into_iter();
-        let threshold = glob_max * 0.1;
-        extr_iter.try_fold(0, |_acc, i| {
-            if y[extremals[i]].abs() > threshold
-            {
-                None
-            }
-            else
-            {
-                Some(0)
-            }
-        });
-        let start = extr_iter.start - 1;
-        extr_iter.try_rfold(0, |_acc, i| {
-            if y[extremals[i]].abs() > threshold
-            {
-                None
-            }
-            else
-            {
-                Some(0)
-            }
-        });
+        else
+        {
+            extremals.reverse();
+            extremals.extend_from_slice(&extremals_positive[..]);
+        };
 
-        let stop = extr_iter.end + 1;
-        let extremals = &extremals[start..stop];
         let (x, y) : (Vec<f64>, Vec<f64>) =
-            extremals.into_iter().map(|&i| (x[i] as f64, y[i])).unzip();
+            extremals.into_iter().map(|i| (x[i] as f64, y[i])).unzip();
         //interpolate wavelet function using extremal points
         let cubic_spline = CubicSpline::interpolate(&x, &y, CubicSplineConstraint::Natural);
         let cubic_spline_d1 = cubic_spline.differentiate();

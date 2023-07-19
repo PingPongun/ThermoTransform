@@ -4,6 +4,7 @@
 
 - fix selection when zoom roi is enabled [UHP]
 - differential time view (diff_tv = tv - tv(t=0)) [HP]
+- windowing before fft [HP]
 - composite views (eg. combine details from different scales in WT) [HP]
 - support more wavelets [HP]
 - ~~signal extension before fourier [?NP]~~

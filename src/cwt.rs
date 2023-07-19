@@ -39,9 +39,7 @@ impl TTLazyCWT
         let wavelet = wavelet_bank
             .get_mut(&params.wavelet.load(Ordering::Relaxed))
             .unwrap(); //`WaveletBank` should have entries for all WaveletType-enum wariants, if not this is an error in code so panic is apropriate
-        let XYTshape = self.integrals[0].dim(); //TODO
-                                                // let polywise = wavelet.get_poly_wise(params.position.read()[TTAxis::S as usize]);
-                                                // let t = params.position.read()[TTAxis::T as usize] as isize;
+        let XYTshape = self.integrals[0].dim();
         let cwt_fn = |integrals : (
             (
                 (ArrayView1<'_, f64>, ArrayView1<'_, f64>),
@@ -72,12 +70,20 @@ impl TTLazyCWT
                     {
                         //wavelet "goes beyond" signal => extend signal using antisymetric half-point extension
                         //x0, x1, x2 -> (2*x0-x2), (2*x0-x1), x0, x1, x2
-                        let s0 = (-s0) as usize;
-                        integral_s0 = [
-                            f64::mul_add(integrals.0[0], 2.0, -integrals.0[s0]),
-                            f64::mul_add(integrals.1[0], 2.0, -integrals.1[s0]),
-                            f64::mul_add(integrals.2[0], 2.0, -integrals.2[s0]),
-                        ];
+                        let s0 = -s0;
+                        if s0 > last_idx_isize
+                        {
+                            integral_s0 = [0., 0., 0.];
+                        }
+                        else
+                        {
+                            let s0 = s0 as usize;
+                            integral_s0 = [
+                                f64::mul_add(integrals.0[0], 2.0, -integrals.0[s0]),
+                                f64::mul_add(integrals.1[0], 2.0, -integrals.1[s0]),
+                                f64::mul_add(integrals.2[0], 2.0, -integrals.2[s0]),
+                            ];
+                        }
                     }
                     else
                     {
@@ -87,12 +93,20 @@ impl TTLazyCWT
                     if sJ > last_idx_isize
                     {
                         //wavelet "goes beyond" signal ...
-                        let sJ = (2 * last_idx_isize - sJ) as usize;
-                        integral_sJ = [
-                            f64::mul_add(integrals.0[last_idx], 2.0, -integrals.0[sJ]),
-                            f64::mul_add(integrals.1[last_idx], 2.0, -integrals.1[sJ]),
-                            f64::mul_add(integrals.2[last_idx], 2.0, -integrals.2[sJ]),
-                        ];
+                        let sJ = 2 * last_idx_isize - sJ;
+                        if sJ < 0
+                        {
+                            integral_sJ = [0., 0., 0.];
+                        }
+                        else
+                        {
+                            let sJ = sJ as usize;
+                            integral_sJ = [
+                                f64::mul_add(integrals.0[last_idx], 2.0, -integrals.0[sJ]),
+                                f64::mul_add(integrals.1[last_idx], 2.0, -integrals.1[sJ]),
+                                f64::mul_add(integrals.2[last_idx], 2.0, -integrals.2[sJ]),
+                            ];
+                        }
                     }
                     else
                     {
@@ -107,7 +121,11 @@ impl TTLazyCWT
                     accum = f64::mul_add(integral_sJ[2], polywise.dxpsi[1].y[2], accum);
                     polywise.d3psi.iter().for_each(|point| {
                         let s = t + point.x;
-                        if s < 0
+                        if s <= last_idx_isize && s >= 0
+                        {
+                            accum = f64::mul_add(integrals.3[s as usize], point.y, accum)
+                        }
+                        else if s < 0 && s >= -last_idx_isize
                         {
                             accum = f64::mul_add(
                                 f64::mul_add(integrals.3[0], 2.0, -integrals.3[(-s) as usize]),
@@ -115,7 +133,7 @@ impl TTLazyCWT
                                 accum,
                             )
                         }
-                        else if s > last_idx_isize
+                        else if s <= last_idx_isize * 2 && s > last_idx_isize
                         {
                             accum = f64::mul_add(
                                 f64::mul_add(
@@ -129,7 +147,7 @@ impl TTLazyCWT
                         }
                         else
                         {
-                            accum = f64::mul_add(integrals.3[s as usize], point.y, accum)
+                            ()
                         }
                     });
                     accum
