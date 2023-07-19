@@ -371,13 +371,33 @@ impl Thermogram
                 settings.changed(true);
                 retval = true;
             }
-            ui.painter_at(img_rsp.rect).rect_stroke(
-                if roi_zoom
-                {
-                    img_rsp.rect
-                }
-                else
-                {
+
+            let crossection_x = settings.crossection.read()[view_axes[0] as usize];
+            let crossection_y = settings.crossection.read()[view_axes[1] as usize];
+            if roi_zoom
+            {
+                let (width, height) = (roi_max_x - roi_min_x, roi_max_y - roi_min_y);
+                ui.painter_at(img_rsp.rect).rect_stroke(
+                    img_rsp.rect,
+                    0.0,
+                    Stroke::new(3.0, Color32::YELLOW),
+                );
+                ui.painter_at(img_rsp.rect).hline(
+                    0.0..=size.x + img_rsp.rect.min.x,
+                    (crossection_y as f32 - roi_min_y as f32) / height as f32 * size.y
+                        + img_rsp.rect.min.y,
+                    Stroke::new(3.0, Color32::GREEN),
+                );
+                ui.painter_at(img_rsp.rect).vline(
+                    (crossection_x as f32 - roi_min_x as f32) / width as f32 * size.x
+                        + img_rsp.rect.min.x,
+                    0.0..=size.y + img_rsp.rect.min.y,
+                    Stroke::new(3.0, Color32::GREEN),
+                );
+            }
+            else
+            {
+                ui.painter_at(img_rsp.rect).rect_stroke(
                     Rect {
                         min : Pos2::new(
                             roi_min_x as f32 / full_size_x as f32 * size.x + img_rsp.rect.min.x,
@@ -387,23 +407,21 @@ impl Thermogram
                             roi_max_x as f32 / full_size_x as f32 * size.x + img_rsp.rect.min.x,
                             roi_max_y as f32 / full_size_y as f32 * size.y + img_rsp.rect.min.y,
                         ),
-                    }
-                },
-                0.0,
-                Stroke::new(3.0, Color32::YELLOW),
-            );
-            let crossection_x = settings.crossection.read()[view_axes[0] as usize];
-            let crossection_y = settings.crossection.read()[view_axes[1] as usize];
-            ui.painter_at(img_rsp.rect).hline(
-                0.0..=size.x + img_rsp.rect.min.x,
-                crossection_y as f32 / full_size_y as f32 * size.y + img_rsp.rect.min.y,
-                Stroke::new(3.0, Color32::GREEN),
-            );
-            ui.painter_at(img_rsp.rect).vline(
-                crossection_x as f32 / full_size_x as f32 * size.x + img_rsp.rect.min.x,
-                0.0..=size.y + img_rsp.rect.min.y,
-                Stroke::new(3.0, Color32::GREEN),
-            );
+                    },
+                    0.0,
+                    Stroke::new(3.0, Color32::YELLOW),
+                );
+                ui.painter_at(img_rsp.rect).hline(
+                    0.0..=size.x + img_rsp.rect.min.x,
+                    crossection_y as f32 / full_size_y as f32 * size.y + img_rsp.rect.min.y,
+                    Stroke::new(3.0, Color32::GREEN),
+                );
+                ui.painter_at(img_rsp.rect).vline(
+                    crossection_x as f32 / full_size_x as f32 * size.x + img_rsp.rect.min.x,
+                    0.0..=size.y + img_rsp.rect.min.y,
+                    Stroke::new(3.0, Color32::GREEN),
+                );
+            };
             ui.add_space(5.0);
             ui.vertical(|ui| {
                 ui.add_space(6.0);
