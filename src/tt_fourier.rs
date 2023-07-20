@@ -17,6 +17,7 @@ use std::mem::MaybeUninit;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use crate::gap_window::GAPWin;
 use crate::tt_common::*;
 pub struct TTFourier
 {
@@ -79,7 +80,14 @@ impl TTFourier
             time_len,
             time_len_wo_padding : input.frames as u32,
         };
-        ndfft_r2c_par(&input.data, &mut fourier.data, &mut fft_handler, 2);
+        let mut windowed_data = input.data.to_owned();
+        let window = GAPWin::KAISER_17_OPT.window(input.data.dim().2);
+        windowed_data
+            .lanes_mut(ndarray::Axis(2))
+            .into_iter()
+            .into_par_iter()
+            .for_each(|mut lane| lane.iter_mut().zip(&window).for_each(|(i, w)| *i *= w));
+        ndfft_r2c_par(&windowed_data, &mut fourier.data, &mut fft_handler, 2);
 
         if FileState::ProcessingFourier == file_state.load(Ordering::Relaxed)
         {
@@ -270,8 +278,20 @@ impl TTFourier
         let temp = self.integrals_dft();
         // exec_time.stop_print("initial");
         // exec_time.start();
-        let ret = temp.map(|x| x.inverse_transform());
+        let mut ret = temp.map(|x| x.inverse_transform());
         // exec_time.stop_print("ifft");
+        //remove window from signal
+        // this is not fully correct!!!, as integral is not (fi*w).(fi*x), but fi*(w.x), where fi is operation taken in Fourier domain to integrate and '.' is multiplication, w is window, x is signal
+        ret.par_iter_mut().enumerate().for_each(|(i, integral3d)| {
+            let win = GAPWin::KAISER_17_OPT.integrated_window(self.time_len_wo_padding as usize, i);
+            let iwin = win.map(|w| 1. / w);
+            integral3d
+                .lanes_mut(ndarray::Axis(2))
+                .into_iter()
+                .into_par_iter()
+                .for_each(|mut lane| lane.iter_mut().zip(&iwin).for_each(|(i, w)| *i *= w))
+        });
+        // exec_time.stop_print("de-window");
         ret
     }
 }

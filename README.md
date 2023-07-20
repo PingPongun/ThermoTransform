@@ -3,7 +3,6 @@
 ## TODO
 
 - differential time view (diff_tv = tv - tv(t=0)) [HP]
-- windowing before fft [HP]
 - composite views (eg. combine details from different scales in WT) [HP]
 - ~~signal extension before fourier [?NP]~~
 - ~~.vpr input file format support [NP]~~

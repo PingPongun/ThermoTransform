@@ -3,6 +3,7 @@
 mod app;
 pub use app::ThermoTransformApp;
 mod cwt;
+mod gap_window;
 mod tt_backend_state;
 mod tt_common;
 mod tt_file;
