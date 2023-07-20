@@ -21,15 +21,15 @@ use crate::gap_window::GAPWin;
 use crate::tt_common::*;
 pub struct TTFourier
 {
-    time_len :            u32,
-    time_len_wo_padding : u32,
+    time_len :            usize,
+    time_len_wo_padding : usize,
     data :                Array3<Complex64>,
 }
 #[derive(Clone)]
 struct TTFourierUninit
 {
-    _time_len :            u32,
-    _time_len_wo_padding : u32,
+    _time_len :            usize,
+    _time_len_wo_padding : usize,
     data :                 Array3<MaybeUninit<Complex<f64>>>,
 }
 
@@ -37,8 +37,8 @@ impl TTFourierUninit
 {
     fn new<const N: usize>(
         shape : (usize, usize, usize),
-        time_len : u32,
-        time_len_wo_padding : u32,
+        time_len : usize,
+        time_len_wo_padding : usize,
     ) -> [TTFourierUninit; N]
     {
         // Create an uninitialized array of `MaybeUninit`. The `assume_init` is
@@ -73,15 +73,15 @@ impl TTFourier
     {
         let mut shape_raw = input.data.dim();
         let mut fft_handler = R2cFftHandler::<f64>::new(shape_raw.2);
-        let time_len = shape_raw.2 as u32;
+        let time_len = shape_raw.2;
         shape_raw.2 = shape_raw.2 / 2 + 1;
         let mut fourier = TTFourier {
             data : Array3::zeros(shape_raw),
             time_len,
-            time_len_wo_padding : input.frames as u32,
+            time_len_wo_padding : input.frames,
         };
         let mut windowed_data = input.data.to_owned();
-        let window = GAPWin::KAISER_17_OPT.window(input.data.dim().2);
+        let window = GAPWin::KAISER_17_OPT.window(input.frames);
         windowed_data
             .lanes_mut(ndarray::Axis(2))
             .into_iter()
@@ -263,11 +263,11 @@ impl TTFourier
     pub fn inverse_transform(&self) -> Array3<f64>
     {
         let mut shape = self.data.dim();
-        shape.2 = self.time_len as usize;
+        shape.2 = self.time_len;
         let mut handler = R2cFftHandler::<f64>::new(shape.2);
         let mut output = Array3::zeros(shape);
         ndifft_r2c_par(&self.data, &mut output, &mut handler, 2);
-        output.slice_axis_inplace(Axis::TIME, Slice::from(..self.time_len_wo_padding as usize));
+        output.slice_axis_inplace(Axis::TIME, Slice::from(..self.time_len_wo_padding));
         output
     }
 
@@ -283,7 +283,7 @@ impl TTFourier
         //remove window from signal
         // this is not fully correct!!!, as integral is not (fi*w).(fi*x), but fi*(w.x), where fi is operation taken in Fourier domain to integrate and '.' is multiplication, w is window, x is signal
         ret.par_iter_mut().enumerate().for_each(|(i, integral3d)| {
-            let win = GAPWin::KAISER_17_OPT.integrated_window(self.time_len_wo_padding as usize, i);
+            let win = GAPWin::KAISER_17_OPT.integrated_window(self.time_len_wo_padding, i);
             let iwin = win.map(|w| 1. / w);
             integral3d
                 .lanes_mut(ndarray::Axis(2))
@@ -291,6 +291,7 @@ impl TTFourier
                 .into_par_iter()
                 .for_each(|mut lane| lane.iter_mut().zip(&iwin).for_each(|(i, w)| *i *= w))
         });
+
         // exec_time.stop_print("de-window");
         ret
     }

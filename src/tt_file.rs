@@ -17,7 +17,7 @@ use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-// use crate::macros::array_pows_2_3;
+use crate::macros::array_pows_2_3;
 use crate::tt_common::*;
 
 #[derive(Clone, PartialEq)]
@@ -161,8 +161,8 @@ impl TTFile
             const IMAGE_DATA_LEN : usize = IMAGE_PIXELS * 6;
             const IMAGE_LEN : usize = IMAGE_DATA_LEN + IMAGE_TOP_HEADER_LEN + IMAGE_ROW_HEADER_LEN;
             let estimated_frames = (meta.len() as usize - FILE_HEADER_LEN) / IMAGE_LEN;
-            // rounded_frames = find_next_pows_2_3(estimated_frames);
-            rounded_frames = estimated_frames;
+            rounded_frames = find_next_pows_2_3(estimated_frames);
+            // rounded_frames = estimated_frames;
             // exec_time.stop_print("pows_2_3 find");
             // exec_time.start();
 
@@ -624,17 +624,17 @@ fn f64_decompress(x : u32) -> f64
     f32::from_bits(f32_bits) as f64
 }
 
-// const PRIMES : &'static [usize] = array_pows_2_3!();
-// fn find_next_pows_2_3(val : usize) -> usize
-// {
-//     match PRIMES.binary_search(&val)
-//     {
-//         Ok(_idx) => val,
-//         Err(idx) =>
-//         {
-//             debug_assert!(PRIMES[idx] > val);
-//             debug_assert!(PRIMES[idx] < 2 * val);
-//             PRIMES[idx]
-//         }
-//     }
-// }
+const PRIMES : &'static [usize] = array_pows_2_3!();
+fn find_next_pows_2_3(val : usize) -> usize
+{
+    match PRIMES.binary_search(&val)
+    {
+        Ok(_idx) => val,
+        Err(idx) =>
+        {
+            debug_assert!(PRIMES[idx] > val);
+            debug_assert!(PRIMES[idx] < 2 * val);
+            PRIMES[idx]
+        }
+    }
+}

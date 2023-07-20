@@ -281,7 +281,9 @@ impl TTViewBackend
             // .into_par_iter()
             .map(|&x| {
                 let color;
-                match gram.scale.binary_search_by(|a| a.partial_cmp(&x).unwrap())
+                match gram
+                    .scale
+                    .binary_search_by(|a| a.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Equal))
                 {
                     Ok(idx) =>
                     {
