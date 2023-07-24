@@ -195,6 +195,17 @@ impl TTViewBackend
         //view modes X-t, X-s, t-Y, s-Y
         {
             //use contrast/normalized values insted of absolute ones
+            let slice_idxs = if view_axes[0] == TTAxis::X
+            {
+                s![self.settings.roi_min.read()[TTAxis::X as usize]
+                    ..self.settings.roi_max.read()[TTAxis::X as usize]]
+            }
+            else
+            {
+                //view_axes[1] == TTAxis::Y
+                s![self.settings.roi_min.read()[TTAxis::Y as usize]
+                    ..self.settings.roi_max.read()[TTAxis::Y as usize]]
+            };
             if grad == TTGradients::Phase
             {
                 array
@@ -202,11 +213,13 @@ impl TTViewBackend
                     .into_iter()
                     .into_par_iter()
                     .for_each(|mut phases| {
-                        let (sum_x, sum_y) =
-                            phases.iter_mut().fold((0., 0.), |(sum_x, sum_y), phase| {
+                        let (sum_x, sum_y) = phases.slice(&slice_idxs).iter().fold(
+                            (0., 0.),
+                            |(sum_x, sum_y), phase| {
                                 let (sin, cos) = phase.sin_cos();
                                 (sum_x + cos, sum_y + sin)
-                            });
+                            },
+                        );
                         let (sum_x, sum_y) =
                             (sum_x / phases.len() as f64, sum_y / phases.len() as f64);
                         let std = 1.0 / (-2.0 * sum_x.hypot(sum_y).clamp(0., 1.).ln()).sqrt();
@@ -232,8 +245,9 @@ impl TTViewBackend
                     .into_iter()
                     .into_par_iter()
                     .for_each(|mut x| {
-                        let std = 1.0 / x.std(0.0);
-                        let mean = x.mean().unwrap_or(0.0);
+                        let xs = x.slice(&slice_idxs);
+                        let std = 1.0 / xs.std(0.0);
+                        let mean = xs.mean().unwrap_or(0.0);
                         x.iter_mut().for_each(|x| *x = (*x - mean) * std)
                     });
             }
