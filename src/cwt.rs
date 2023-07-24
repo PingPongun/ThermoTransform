@@ -271,3 +271,170 @@ impl TTLazyCWT
         }
     }
 }
+
+impl TTInputData
+{
+    pub fn cwt(&self, wavelet_bank : &mut WaveletBank, params : &ViewMode) -> Array2<f64>
+    {
+        let wavelet = wavelet_bank
+            .get_mut(&params.wavelet.load(Ordering::Relaxed))
+            .unwrap(); //`WaveletBank` should have entries for all WaveletType-enum wariants, if not this is an error in code so panic is apropriate
+        let view_axes = params.get_view_axes();
+        let mut size = [0, 0];
+        let position = params.position.read().clone();
+        let x_range = if view_axes[0] == TTAxis::X
+        {
+            size[0] = self.width;
+            0..=self.width - 1
+        }
+        else
+        {
+            position[TTAxis::X as usize]..=position[TTAxis::X as usize]
+        };
+        let y_range = if view_axes[1] == TTAxis::Y
+        {
+            size[1] = self.height;
+            0..=self.height - 1
+        }
+        else
+        {
+            position[TTAxis::Y as usize]..=position[TTAxis::Y as usize]
+        };
+        assert!(self.frames < u16::MAX as usize); //TODO ? prepare impl for larger sequences
+        let t_chunk_div;
+        let t_range = if view_axes[0] == TTAxis::T || view_axes[1] == TTAxis::T
+        {
+            size[(view_axes[1] == TTAxis::T) as usize] = self.frames;
+            t_chunk_div = self.frames;
+            0..=(self.frames - 1) as u16
+        }
+        else
+        {
+            t_chunk_div = 1;
+            position[TTAxis::T as usize] as u16..=position[TTAxis::T as usize] as u16
+        };
+        let s_chunk_div;
+        let s_range = if view_axes[0] == TTAxis::S || view_axes[1] == TTAxis::S
+        {
+            size[(view_axes[1] == TTAxis::S) as usize] = self.frames;
+            s_chunk_div = self.frames;
+            wavelet.batch_calc(self.frames);
+            0..=(self.frames - 1) as u16
+        }
+        else
+        {
+            s_chunk_div = 1;
+            let _ = wavelet.get_poly_wise(position[TTAxis::S as usize]);
+            position[TTAxis::S as usize] as u16..=position[TTAxis::S as usize] as u16
+        };
+        let slice_arg = s![x_range, y_range, ..];
+        let mut v : Vec<f64> = vec![0.0; size[0] * size[1]];
+        s_range
+            .into_par_iter()
+            .zip(v.par_chunks_exact_mut(size[0] * size[1] / s_chunk_div))
+            .for_each(|(s, v)| {
+                let polywise = wavelet.uget_poly_wise(s as usize);
+                t_range
+                    .clone()
+                    .into_par_iter()
+                    .zip(v.par_chunks_exact_mut(v.len() / t_chunk_div))
+                    .for_each(|(t, v)| {
+                        self.data
+                            .slice(slice_arg)
+                            .lanes(Axis::TIME)
+                            .into_iter()
+                            .into_par_iter()
+                            .zip(v.into_par_iter())
+                            .for_each(|(data, v)| {
+                                let real_img : Vec<f64> = polywise
+                                    .0
+                                    .iter()
+                                    .map(|polywise| {
+                                        let mid = polywise.psi.len() >> 1;
+                                        let t = t as usize;
+                                        let mut accum : f64 = 0.0;
+
+                                        let (minp, mins) = if t < mid
+                                        {
+                                            //extend below 0
+                                            let minp = mid - t;
+                                            let mins = minp.clamp(0, self.frames - 1);
+                                            (1..=mins).rev().into_iter().enumerate().for_each(
+                                                |(ip, is)| {
+                                                    let psi = polywise.psi[ip];
+                                                    let sig = f64::mul_add(data[0], 2.0, -data[is]);
+                                                    accum = f64::mul_add(psi, sig, accum);
+                                                },
+                                            );
+                                            (minp, 0)
+                                        }
+                                        else
+                                        {
+                                            (0, t - mid)
+                                        };
+
+                                        let (maxp, maxs) = if t + mid >= self.frames
+                                        {
+                                            //extend above max
+                                            let a = t + mid - self.frames;
+                                            let maxp = polywise.psi.len() - a;
+                                            let maxs = polywise.psi.len().saturating_sub(a);
+                                            (maxp..polywise.psi.len())
+                                                .into_iter()
+                                                .zip((maxs..self.frames).rev())
+                                                .for_each(|(ip, is)| {
+                                                    let psi = polywise.psi[ip];
+                                                    let sig = f64::mul_add(
+                                                        data[self.frames - 1],
+                                                        2.0,
+                                                        -data[is],
+                                                    );
+                                                    accum = f64::mul_add(psi, sig, accum);
+                                                });
+                                            (maxp, self.frames)
+                                        }
+                                        else
+                                        {
+                                            (polywise.psi.len(), t + mid)
+                                        };
+                                        (minp..maxp).into_iter().zip(mins..maxs).for_each(
+                                            |(ip, is)| {
+                                                let psi = polywise.psi[ip];
+                                                let sig = data[is];
+                                                accum = f64::mul_add(psi, sig, accum);
+                                            },
+                                        );
+                                        accum
+                                    })
+                                    .collect();
+                                //convert to requested format
+                                *v = match params.display_mode.load(Ordering::Relaxed)
+                                {
+                                    ComplexResultMode::Phase => real_img[1].atan2(real_img[0]), //radians
+                                    ComplexResultMode::Magnitude => real_img[0].hypot(real_img[1]),
+                                    ComplexResultMode::Real => real_img[0],
+                                    ComplexResultMode::Imaginary => real_img[1],
+                                }
+                            })
+                    })
+            });
+        //if X-t, X-s, t-s transpose
+        match view_axes
+        {
+            [TTAxis::X, TTAxis::T] | [TTAxis::X, TTAxis::S] | [TTAxis::T, TTAxis::S] =>
+            {
+                Array2::from_shape_vec((size[1], size[0]), v)
+                    .unwrap()
+                    .reversed_axes()
+            }
+            [TTAxis::X, TTAxis::Y] => Array2::from_shape_vec((size[0], size[1]), v).unwrap(),
+            [TTAxis::T, TTAxis::Y] | [TTAxis::S, TTAxis::Y] =>
+            {
+                Array2::from_shape_vec((size[0], size[1]), v)
+                    .unwrap()
+                    .reversed_axes() //counter transposition in TTViewBackend::update_image()
+            }
+            _ => unreachable!(),
+        }
+    }
+}

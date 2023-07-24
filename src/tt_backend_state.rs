@@ -83,13 +83,49 @@ impl TTViewBackend
             }
         }
     }
+    fn true_wavelet_view_check_update(
+        &mut self,
+        input_data : &Option<TTInputData>,
+        wavelet_bank : &mut WaveletBank,
+    ) -> ()
+    {
+        if self.frozen_view_mode.domain.load(Relaxed) == ViewModeDomain::WaveletView
+        {
+            if let Ok(_) = self.state.compare_exchange(
+                TTViewState::Changed,
+                TTViewState::Processing,
+                Ordering::SeqCst,
+                Ordering::Acquire,
+            )
+            {
+                if let Some(input) = input_data
+                {
+                    //// calculate & display requested waveletet transform
+                    // let mut exec_time = ExecutionTimeMeas::new("exec_time_cwt.txt");
+                    // exec_time.start();
+                    let cwt_view = input.cwt(wavelet_bank, &self.frozen_view_mode);
+                    // exec_time.stop_print("cwt: ");
+                    let denoise = self.frozen_view_mode.denoise.load(Relaxed);
+                    if self.frozen_view_mode.display_mode.load(Relaxed) == ComplexResultMode::Phase
+                    {
+                        self.update_image(cwt_view.view(), TTGradients::Phase, denoise);
+                    }
+                    else
+                    {
+                        self.update_image(cwt_view.view(), TTGradients::Linear, denoise);
+                    };
+                    // exec_time.stop_print("update_image: ");
+                }
+            }
+        }
+    }
     fn wavelet_view_check_update(
         &mut self,
         lazy_cwt : &Option<TTLazyCWT>,
         wavelet_bank : &mut WaveletBank,
     ) -> ()
     {
-        if self.frozen_view_mode.domain.load(Relaxed) == ViewModeDomain::WaveletView
+        if self.frozen_view_mode.domain.load(Relaxed) == ViewModeDomain::FastWaveletView
         {
             if let Ok(_) = self.state.compare_exchange(
                 TTViewState::Changed,
@@ -476,6 +512,10 @@ impl TTStateBackend
                                     {
                                         view.freeze_view_mode();
                                         view.time_view_check_update(&self.file.data.input_data);
+                                        view.true_wavelet_view_check_update(
+                                            &self.file.data.input_data,
+                                            &mut self.wavelet_bank,
+                                        );
                                     }
                                 }
                             },
@@ -518,6 +558,10 @@ impl TTStateBackend
                                         view.freeze_view_mode();
                                         view.time_view_check_update(&self.file.data.input_data);
                                         view.fourier_view_check_update(&self.file.data.fourier);
+                                        view.true_wavelet_view_check_update(
+                                            &self.file.data.input_data,
+                                            &mut self.wavelet_bank,
+                                        );
                                     }
                                 }
                             },
@@ -562,6 +606,10 @@ impl TTStateBackend
                                         &mut self.wavelet_bank,
                                     );
                                     view.fourier_view_check_update(&self.file.data.fourier);
+                                    view.true_wavelet_view_check_update(
+                                        &self.file.data.input_data,
+                                        &mut self.wavelet_bank,
+                                    );
                                 }
                             }
                         },
@@ -595,6 +643,10 @@ impl TTStateBackend
                             &mut self.wavelet_bank,
                         );
                         view.fourier_view_check_update(&self.file.data.fourier);
+                        view.true_wavelet_view_check_update(
+                            &self.file.data.input_data,
+                            &mut self.wavelet_bank,
+                        );
                     }
                     self.check_changed_and_sleep();
                 }

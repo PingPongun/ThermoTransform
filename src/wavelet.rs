@@ -25,6 +25,7 @@ pub struct PolyWiseWavelet
 {
     pub dxpsi : [Point<isize, [f64; 3]>; 2],
     pub d3psi : Vec<Point<isize, f64>>,
+    pub psi :   Vec<f64>,
 }
 #[inline(always)]
 fn onesided_extremals_search(
@@ -136,20 +137,20 @@ impl PolyWiseWavelet
             extremals.reverse();
             extremals.extend_from_slice(&extremals_positive[..]);
         };
-
-        let (x, y) : (Vec<f64>, Vec<f64>) =
+        let psi = y[*extremals.first().unwrap()..=*extremals.last().unwrap()].to_vec();
+        let (xe, ye) : (Vec<f64>, Vec<f64>) =
             extremals.into_iter().map(|i| (x[i] as f64, y[i])).unzip();
         //interpolate wavelet function using extremal points
-        let cubic_spline = CubicSpline::interpolate(&x, &y, CubicSplineConstraint::Natural);
+        let cubic_spline = CubicSpline::interpolate(&xe, &ye, CubicSplineConstraint::Natural);
         let cubic_spline_d1 = cubic_spline.differentiate();
         let cubic_spline_d2 = cubic_spline_d1.differentiate();
         let cubic_spline_d3 = cubic_spline_d2.differentiate();
         //`cubic_spline_d3` is picewise constant, with discontinuities at `x`
         //mathru implementation of cubic spline at this points evaluates to right-side value (x => x+)
         //  (exept last x which evals to left-side val (x_last=> x_last-))
-        let (x0f, xJf) = (*x.first().unwrap(), *x.last().unwrap());
+        let (x0f, xJf) = (*xe.first().unwrap(), *xe.last().unwrap());
         let (x0, xJ) = (x0f as isize, xJf as isize);
-        let mut d3psi_raw : Vec<_> = x
+        let mut d3psi_raw : Vec<_> = xe
             .iter()
             .map(|&x| {
                 Point {
@@ -196,6 +197,7 @@ impl PolyWiseWavelet
                         .chain([d3psi_raw_last].into_iter()),
                 )
                 .collect(),
+            psi,
         }
     }
 }

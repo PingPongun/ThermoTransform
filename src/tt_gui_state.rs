@@ -206,7 +206,7 @@ impl ViewMode
                     ui.label("| mode:");
                     changed |= atomicCombobox!(self.display_mode, ui);
                 }
-                ViewModeDomain::WaveletView =>
+                ViewModeDomain::FastWaveletView | ViewModeDomain::WaveletView =>
                 {
                     ui.style_mut().wrap = Some(false);
                     ui.label("| mode:");
@@ -564,12 +564,12 @@ impl TTStateGUI
                 Default::default(),
             ),
             ViewMode::new(
-                ViewModeDomain::WaveletView,
+                ViewModeDomain::FastWaveletView,
                 WaveletType::Morlet,
                 ComplexResultMode::Phase,
             ),
             ViewMode::new(
-                ViewModeDomain::WaveletView,
+                ViewModeDomain::FastWaveletView,
                 WaveletType::Morlet,
                 ComplexResultMode::Magnitude,
             ),

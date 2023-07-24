@@ -56,9 +56,10 @@ pub enum TTAxis
 #[strum(serialize_all = "title_case")]
 pub enum ViewModeDomain
 {
-    TimeView    = 0,
-    FourierView = 1,
-    WaveletView = 2,
+    TimeView        = 0,
+    FourierView     = 1,
+    FastWaveletView = 2,
+    WaveletView     = 3,
 }
 pub struct ViewMode
 {
@@ -223,7 +224,7 @@ mod tt_axis
 
     impl ViewMode
     {
-        pub const ViewModeAxes : [&[([TTAxis; 2], &'static [TTAxis])]; 3] = [
+        pub const ViewModeAxes : [&[([TTAxis; 2], &'static [TTAxis])]; 4] = [
             &[([X, Y], &[T]), ([X, T], &[Y]), ([T, Y], &[X])], /*time*/
             &[([X, Y], &[F]), ([X, F], &[Y]), ([F, Y], &[X])], /*fourier*/
             &[
@@ -234,6 +235,14 @@ mod tt_axis
                 ([S, Y], &[T, X]),
                 ([T, S], &[X, Y]),
             ], /*wavelet*/
+            &[
+                ([X, Y], &[T, S]),
+                ([X, T], &[Y, S]),
+                ([X, S], &[T, Y]),
+                ([T, Y], &[X, S]),
+                ([S, Y], &[T, X]),
+                ([T, S], &[X, Y]),
+            ], /*true wavelet*/
         ];
     }
 }
