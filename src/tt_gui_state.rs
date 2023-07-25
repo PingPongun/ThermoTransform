@@ -304,10 +304,8 @@ impl Thermogram
         let responce = ui.horizontal_centered(|ui| {
             let img_rsp = ui.add(Image::new(self.image.id(), size).sense(Sense::click()));
             let size = img_rsp.rect.size();
-            let mut roi_min_x = settings.roi_min.read()[view_axes[0] as usize];
-            let mut roi_min_y = settings.roi_min.read()[view_axes[1] as usize];
-            let mut roi_max_x = settings.roi_max.read()[view_axes[0] as usize];
-            let mut roi_max_y = settings.roi_max.read()[view_axes[1] as usize];
+            let mut roi_x = settings.get_roi(view_axes[0]);
+            let mut roi_y = settings.get_roi(view_axes[1]);
             let full_size_x = settings.full_size.read()[view_axes[0] as usize];
             let full_size_y = settings.full_size.read()[view_axes[1] as usize];
             let roi_zoom = settings.roi_zoom.load(Ordering::Relaxed);
@@ -318,13 +316,13 @@ impl Thermogram
                 let click_pos = img_rsp.interact_pointer_pos().unwrap();
                 let (mut new_x, mut new_y) = if roi_zoom
                 {
-                    let (width, height) = (roi_max_x - roi_min_x, roi_max_y - roi_min_y);
+                    let (width, height) = (roi_x.len(), roi_y.len());
 
                     (
-                        (roi_min_x as f32
+                        (roi_x.start as f32
                             + width as f32 * (click_pos.x - img_rsp.rect.min.x) / size.x)
                             as usize,
-                        (roi_min_y as f32
+                        (roi_y.start as f32
                             + height as f32 * (click_pos.y - img_rsp.rect.min.y) / size.y)
                             as usize,
                     )
@@ -350,23 +348,23 @@ impl Thermogram
                     //selecting ROI
                     let (other_x, other_y) = if select_mode == SelectMode::RoiMax
                     {
-                        (roi_min_x.clone(), roi_min_y.clone())
+                        (roi_x.start.clone(), roi_y.start.clone())
                     }
                     else
                     {
                         //SelectMode::RoiMin
-                        (roi_max_x.clone(), roi_max_y.clone())
+                        (roi_x.end.clone(), roi_y.end.clone())
                     };
-                    roi_min_x = usize::min(new_x, other_x);
-                    roi_min_y = usize::min(new_y, other_y);
-                    roi_max_x = usize::max(new_x, other_x);
-                    roi_max_y = usize::max(new_y, other_y);
+                    roi_x.start = usize::min(new_x, other_x);
+                    roi_y.start = usize::min(new_y, other_y);
+                    roi_x.end = usize::max(new_x, other_x);
+                    roi_y.end = usize::max(new_y, other_y);
                     let mut roi_min = settings.roi_min.write();
                     let mut roi_max = settings.roi_max.write();
-                    roi_min[view_axes[0] as usize] = roi_min_x;
-                    roi_min[view_axes[1] as usize] = roi_min_y;
-                    roi_max[view_axes[0] as usize] = roi_max_x;
-                    roi_max[view_axes[1] as usize] = roi_max_y;
+                    roi_min[view_axes[0] as usize] = roi_x.start;
+                    roi_min[view_axes[1] as usize] = roi_y.start;
+                    roi_max[view_axes[0] as usize] = roi_x.end;
+                    roi_max[view_axes[1] as usize] = roi_y.end;
                 }
                 settings.changed(true);
                 retval = true;
@@ -376,7 +374,7 @@ impl Thermogram
             let crossection_y = settings.crossection.read()[view_axes[1] as usize];
             if roi_zoom
             {
-                let (width, height) = (roi_max_x - roi_min_x, roi_max_y - roi_min_y);
+                let (width, height) = (roi_x.len(), roi_y.len());
                 ui.painter_at(img_rsp.rect).rect_stroke(
                     img_rsp.rect,
                     0.0,
@@ -384,12 +382,12 @@ impl Thermogram
                 );
                 ui.painter_at(img_rsp.rect).hline(
                     0.0..=size.x + img_rsp.rect.min.x,
-                    (crossection_y as f32 - roi_min_y as f32) / height as f32 * size.y
+                    (crossection_y as f32 - roi_y.start as f32) / height as f32 * size.y
                         + img_rsp.rect.min.y,
                     Stroke::new(3.0, Color32::GREEN),
                 );
                 ui.painter_at(img_rsp.rect).vline(
-                    (crossection_x as f32 - roi_min_x as f32) / width as f32 * size.x
+                    (crossection_x as f32 - roi_x.start as f32) / width as f32 * size.x
                         + img_rsp.rect.min.x,
                     0.0..=size.y + img_rsp.rect.min.y,
                     Stroke::new(3.0, Color32::GREEN),
@@ -400,12 +398,12 @@ impl Thermogram
                 ui.painter_at(img_rsp.rect).rect_stroke(
                     Rect {
                         min : Pos2::new(
-                            roi_min_x as f32 / full_size_x as f32 * size.x + img_rsp.rect.min.x,
-                            roi_min_y as f32 / full_size_y as f32 * size.y + img_rsp.rect.min.y,
+                            roi_x.start as f32 / full_size_x as f32 * size.x + img_rsp.rect.min.x,
+                            roi_y.start as f32 / full_size_y as f32 * size.y + img_rsp.rect.min.y,
                         ),
                         max : Pos2::new(
-                            roi_max_x as f32 / full_size_x as f32 * size.x + img_rsp.rect.min.x,
-                            roi_max_y as f32 / full_size_y as f32 * size.y + img_rsp.rect.min.y,
+                            roi_x.end as f32 / full_size_x as f32 * size.x + img_rsp.rect.min.x,
+                            roi_y.end as f32 / full_size_y as f32 * size.y + img_rsp.rect.min.y,
                         ),
                     },
                     0.0,

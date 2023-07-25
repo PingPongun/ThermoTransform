@@ -261,11 +261,11 @@ impl WaveletParams
 
         self.wavelets
             .par_iter_mut()
-            .zip((0..scale as u16).into_par_iter())
+            .zip((0..scale).into_par_iter())
             .for_each(|(w, s)| {
                 if None == *w
                 {
-                    let poly_wise = PolyWiseComplex::new(self.func, s as usize + 1, 1.0);
+                    let poly_wise = PolyWiseComplex::new(self.func, s + 1, 1.0);
                     *w = Some(poly_wise.clone());
                 }
             })

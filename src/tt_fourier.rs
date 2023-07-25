@@ -1,5 +1,7 @@
+use ndarray::s;
 use ndarray::Array2;
 use ndarray::Array3;
+use ndarray::Axis;
 use ndarray::Slice;
 use ndrustfft::ndfft_r2c_par;
 use ndrustfft::ndifft_r2c_par;
@@ -83,7 +85,7 @@ impl TTFourier
         let mut windowed_data = input.data.to_owned();
         let window = GAPWin::KAISER_17_OPT.window(input.frames);
         windowed_data
-            .lanes_mut(ndarray::Axis(2))
+            .lanes_mut(AXIS_T)
             .into_iter()
             .into_par_iter()
             .for_each(|mut lane| lane.iter_mut().zip(&window).for_each(|(i, w)| *i *= w));
@@ -103,7 +105,7 @@ impl TTFourier
     {
         let settings_axis = params.get_settings_axes()[0] as usize;
         let freq_view = self.data.index_axis(
-            ndarray::Axis(
+            Axis(
                 if settings_axis == TTAxis::F as usize
                 {
                     2
@@ -190,10 +192,10 @@ impl TTFourier
             .par_bridge()
             .for_each(|(x, w_coeffs)| {
                 x.data
-                    .lanes_mut(Axis::TIME)
+                    .lanes_mut(AXIS_T)
                     .into_iter()
                     .into_par_iter()
-                    .zip(self.data.lanes(Axis::TIME).into_iter())
+                    .zip(self.data.lanes(AXIS_T).into_iter())
                     .for_each(|(mut oarray, iarray)| {
                         oarray
                             .as_slice_memory_order_mut()
@@ -221,10 +223,10 @@ impl TTFourier
             .par_bridge()
             .for_each(|(x, w_coeffs)| {
                 x.data
-                    .lanes_mut(Axis::TIME)
+                    .lanes_mut(AXIS_T)
                     .into_iter()
                     .into_par_iter()
-                    .zip(self.data.lanes(Axis::TIME).into_iter())
+                    .zip(self.data.lanes(AXIS_T).into_iter())
                     .for_each(|(mut oarray, iarray)| {
                         oarray
                             .as_slice_memory_order_mut()
@@ -253,7 +255,7 @@ impl TTFourier
 
         res.par_iter_mut().for_each(|x| {
             let fill = Complex64::new(0.0, 0.0);
-            x.data.index_axis_mut(Axis::TIME, 0).fill(fill);
+            x.data.index_axis_mut(AXIS_T, 0).fill(fill);
         });
         // exec_time.stop_print("end");
 
@@ -267,7 +269,7 @@ impl TTFourier
         let mut handler = R2cFftHandler::<f64>::new(shape.2);
         let mut output = Array3::zeros(shape);
         ndifft_r2c_par(&self.data, &mut output, &mut handler, 2);
-        output.slice_axis_inplace(Axis::TIME, Slice::from(..self.time_len_wo_padding));
+        output.slice_axis_inplace(AXIS_T, Slice::from(..self.time_len_wo_padding));
         output
     }
 
@@ -286,7 +288,7 @@ impl TTFourier
             let win = GAPWin::KAISER_17_OPT.integrated_window(self.time_len_wo_padding, i);
             let iwin = win.map(|w| 1. / w);
             integral3d
-                .lanes_mut(ndarray::Axis(2))
+                .lanes_mut(AXIS_T)
                 .into_iter()
                 .into_par_iter()
                 .for_each(|mut lane| lane.iter_mut().zip(&iwin).for_each(|(i, w)| *i *= w))

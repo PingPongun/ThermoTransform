@@ -2,7 +2,7 @@ use atomic_enum::atomic_enum;
 use egui::mutex::RwLock;
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 use lazy_static::*;
-use ndarray::{Array3, Ix5};
+use ndarray::{Array3, Axis, Ix5};
 
 use crate::wavelet::AtomicWaveletType;
 use crate::wavelet::WaveletType;
@@ -13,6 +13,7 @@ use std::io::BufWriter;
 #[cfg(feature = "time_meas")]
 use std::io::Write;
 use std::iter;
+use std::ops::Range;
 use std::str::FromStr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,6 +49,7 @@ pub enum TTAxis
     S = 3,
     F = 4,
 }
+pub const AXIS_T : Axis = Axis(TTAxis::T as usize);
 
 #[atomic_enum]
 #[derive(
@@ -72,13 +74,6 @@ pub struct ViewMode
     pub denoise :       AtomicBool,
 }
 
-pub mod Axis
-{
-    #![allow(dead_code)]
-    pub const TIME : ndarray::Axis = ndarray::Axis(2);
-    pub const HEIGHT : ndarray::Axis = ndarray::Axis(1);
-    pub const WIDTH : ndarray::Axis = ndarray::Axis(0);
-}
 #[atomic_enum]
 #[derive(PartialEq, Default, strum_macros::AsRefStr, EnumString, EnumVariantNames)]
 #[strum(serialize_all = "title_case")]
@@ -307,6 +302,10 @@ impl Default for GlobalSettings
 impl GlobalSettings
 {
     pub fn changed(&self, set : bool) -> bool { self.changed.swap(set, Ordering::Relaxed) }
+    pub fn get_roi(&self, axis : TTAxis) -> Range<usize>
+    {
+        self.roi_min.read()[axis as usize]..self.roi_max.read()[axis as usize]
+    }
 }
 impl Thermogram
 {

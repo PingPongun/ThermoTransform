@@ -224,27 +224,12 @@ impl TTLazyCWT
                     .for_each(|(t, v)| {
                         self.integrals[0]
                             .slice(slice_arg)
-                            .lanes(Axis::TIME)
+                            .lanes(AXIS_T)
                             .into_iter()
                             .into_par_iter()
-                            .zip(
-                                self.integrals[1]
-                                    .slice(slice_arg)
-                                    .lanes(Axis::TIME)
-                                    .into_iter(),
-                            )
-                            .zip(
-                                self.integrals[2]
-                                    .slice(slice_arg)
-                                    .lanes(Axis::TIME)
-                                    .into_iter(),
-                            )
-                            .zip(
-                                self.integrals[3]
-                                    .slice(slice_arg)
-                                    .lanes(Axis::TIME)
-                                    .into_iter(),
-                            )
+                            .zip(self.integrals[1].slice(slice_arg).lanes(AXIS_T).into_iter())
+                            .zip(self.integrals[2].slice(slice_arg).lanes(AXIS_T).into_iter())
+                            .zip(self.integrals[3].slice(slice_arg).lanes(AXIS_T).into_iter())
                             .zip(v.into_par_iter())
                             .for_each(|(integrals, v)| {
                                 *v = cwt_fn(integrals, &polywise, t as isize)
@@ -341,7 +326,7 @@ impl TTInputData
                     .for_each(|(t, v)| {
                         self.data
                             .slice(slice_arg)
-                            .lanes(Axis::TIME)
+                            .lanes(AXIS_T)
                             .into_iter()
                             .into_par_iter()
                             .zip(v.into_par_iter())
