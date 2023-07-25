@@ -1,4 +1,4 @@
-# TermoTransform
+# ThermoTransform
 
 ## TODO
 
@@ -16,4 +16,3 @@
 - flexible windowing/views [?ULP]
 - persistent app settings [ULP]
 - hints & help [ULP]
-- support for sequences longer than 65k frames (cwt) [ULP]

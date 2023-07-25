@@ -2,6 +2,8 @@ use ndarray::s;
 use ndarray::Array2;
 use ndarray::Array3;
 use ndarray::ArrayView1;
+use ndarray::ArrayViewMut3;
+use ndarray::Zip;
 use rayon::prelude::IndexedParallelIterator;
 use rayon::prelude::IntoParallelIterator;
 use rayon::prelude::ParallelIterator;
@@ -34,27 +36,25 @@ impl TTLazyCWT
             None
         }
     }
-    pub fn cwt(&self, wavelet_bank : &mut WaveletBank, params : &ViewMode) -> Array2<f64>
+    pub fn cwt(
+        &self,
+        wavelet_bank : &mut WaveletBank,
+        params : &ViewMode,
+        settings : &GlobalSettings,
+    ) -> Array2<f64>
     {
         let wavelet = wavelet_bank
             .get_mut(&params.wavelet.load(Ordering::Relaxed))
             .unwrap(); //`WaveletBank` should have entries for all WaveletType-enum wariants, if not this is an error in code so panic is apropriate
         let XYTshape = self.integrals[0].dim();
         let cwt_fn = |integrals : (
-            (
-                (ArrayView1<'_, f64>, ArrayView1<'_, f64>),
-                ArrayView1<'_, f64>,
-            ),
+            ArrayView1<'_, f64>,
+            ArrayView1<'_, f64>,
+            ArrayView1<'_, f64>,
             ArrayView1<'_, f64>,
         ),
                       polywise : &PolyWiseComplex,
                       t : isize| {
-            let integrals = (
-                integrals.0 .0 .0,
-                integrals.0 .0 .1,
-                integrals.0 .1,
-                integrals.1,
-            );
             let real_img : Vec<f64> = polywise
                 .0
                 .iter()
@@ -165,51 +165,84 @@ impl TTLazyCWT
         let view_axes = params.get_view_axes();
         let mut size = [0, 0];
         let position = params.position.read().clone();
+        let roi_zoom = settings.roi_zoom.load(Ordering::Relaxed);
         let x_range = if view_axes[0] == TTAxis::X
         {
-            size[0] = XYTshape.0;
-            0..=XYTshape.0 - 1
+            let range = if roi_zoom
+            {
+                settings.get_roi(TTAxis::X)
+            }
+            else
+            {
+                0..XYTshape.0
+            };
+            size[0] = range.len();
+            range
         }
         else
         {
-            position[TTAxis::X as usize]..=position[TTAxis::X as usize]
+            position[TTAxis::X as usize]..position[TTAxis::X as usize] + 1
         };
         let y_range = if view_axes[1] == TTAxis::Y
         {
-            size[1] = XYTshape.1;
-            0..=XYTshape.1 - 1
+            let range = if roi_zoom
+            {
+                settings.get_roi(TTAxis::Y)
+            }
+            else
+            {
+                0..XYTshape.1
+            };
+            size[1] = range.len();
+            range
         }
         else
         {
-            position[TTAxis::Y as usize]..=position[TTAxis::Y as usize]
+            position[TTAxis::Y as usize]..position[TTAxis::Y as usize] + 1
         };
-        assert!(XYTshape.2 < u16::MAX as usize); //TODO ? prepare impl for larger sequences
         let t_chunk_div;
         let t_range = if view_axes[0] == TTAxis::T || view_axes[1] == TTAxis::T
         {
-            size[(view_axes[1] == TTAxis::T) as usize] = XYTshape.2;
-            t_chunk_div = XYTshape.2;
-            0..=(XYTshape.2 - 1) as u16
+            let range = if roi_zoom
+            {
+                settings.get_roi(TTAxis::T)
+            }
+            else
+            {
+                0..XYTshape.2
+            };
+            size[(view_axes[1] == TTAxis::T) as usize] = range.len();
+            t_chunk_div = range.len();
+            range
         }
         else
         {
             t_chunk_div = 1;
-            position[TTAxis::T as usize] as u16..=position[TTAxis::T as usize] as u16
+            position[TTAxis::T as usize]..position[TTAxis::T as usize] + 1
         };
         let s_chunk_div;
         let s_range = if view_axes[0] == TTAxis::S || view_axes[1] == TTAxis::S
         {
-            size[(view_axes[1] == TTAxis::S) as usize] = XYTshape.2;
-            s_chunk_div = XYTshape.2;
-            wavelet.batch_calc(XYTshape.2);
-            0..=(XYTshape.2 - 1) as u16
+            let range = if roi_zoom
+            {
+                settings.get_roi(TTAxis::S)
+            }
+            else
+            {
+                0..XYTshape.2
+            };
+            wavelet.batch_calc(range.end);
+            size[(view_axes[1] == TTAxis::S) as usize] = range.len();
+            s_chunk_div = range.len();
+            range
         }
         else
         {
             s_chunk_div = 1;
             let _ = wavelet.get_poly_wise(position[TTAxis::S as usize]);
-            position[TTAxis::S as usize] as u16..=position[TTAxis::S as usize] as u16
+            position[TTAxis::S as usize]..position[TTAxis::S as usize] + 1
         };
+        let avm3 = (x_range.len(), y_range.len(), 1);
         let slice_arg = s![x_range, y_range, ..];
         let mut v : Vec<f64> = vec![0.0; size[0] * size[1]];
         s_range
@@ -222,17 +255,17 @@ impl TTLazyCWT
                     .into_par_iter()
                     .zip(v.par_chunks_exact_mut(v.len() / t_chunk_div))
                     .for_each(|(t, v)| {
-                        self.integrals[0]
-                            .slice(slice_arg)
-                            .lanes(AXIS_T)
-                            .into_iter()
-                            .into_par_iter()
-                            .zip(self.integrals[1].slice(slice_arg).lanes(AXIS_T).into_iter())
-                            .zip(self.integrals[2].slice(slice_arg).lanes(AXIS_T).into_iter())
-                            .zip(self.integrals[3].slice(slice_arg).lanes(AXIS_T).into_iter())
-                            .zip(v.into_par_iter())
-                            .for_each(|(integrals, v)| {
-                                *v = cwt_fn(integrals, &polywise, t as isize)
+                        Zip::from(self.integrals[0].slice(slice_arg).lanes(AXIS_T))
+                            .and(self.integrals[1].slice(slice_arg).lanes(AXIS_T))
+                            .and(self.integrals[2].slice(slice_arg).lanes(AXIS_T))
+                            .and(self.integrals[3].slice(slice_arg).lanes(AXIS_T))
+                            .and(
+                                ArrayViewMut3::from_shape(avm3, v)
+                                    .unwrap()
+                                    .lanes_mut(AXIS_T),
+                            )
+                            .par_for_each(|i0, i1, i2, i3, mut v| {
+                                v[0] = cwt_fn((i0, i1, i2, i3), &polywise, t as isize)
                             })
                     })
             });
@@ -259,7 +292,12 @@ impl TTLazyCWT
 
 impl TTInputData
 {
-    pub fn cwt(&self, wavelet_bank : &mut WaveletBank, params : &ViewMode) -> Array2<f64>
+    pub fn cwt(
+        &self,
+        wavelet_bank : &mut WaveletBank,
+        params : &ViewMode,
+        settings : &GlobalSettings,
+    ) -> Array2<f64>
     {
         let wavelet = wavelet_bank
             .get_mut(&params.wavelet.load(Ordering::Relaxed))
@@ -267,51 +305,84 @@ impl TTInputData
         let view_axes = params.get_view_axes();
         let mut size = [0, 0];
         let position = params.position.read().clone();
+        let roi_zoom = settings.roi_zoom.load(Ordering::Relaxed);
         let x_range = if view_axes[0] == TTAxis::X
         {
-            size[0] = self.width;
-            0..=self.width - 1
+            let range = if roi_zoom
+            {
+                settings.get_roi(TTAxis::X)
+            }
+            else
+            {
+                0..self.width
+            };
+            size[0] = range.len();
+            range
         }
         else
         {
-            position[TTAxis::X as usize]..=position[TTAxis::X as usize]
+            position[TTAxis::X as usize]..position[TTAxis::X as usize] + 1
         };
         let y_range = if view_axes[1] == TTAxis::Y
         {
-            size[1] = self.height;
-            0..=self.height - 1
+            let range = if roi_zoom
+            {
+                settings.get_roi(TTAxis::Y)
+            }
+            else
+            {
+                0..self.height
+            };
+            size[1] = range.len();
+            range
         }
         else
         {
-            position[TTAxis::Y as usize]..=position[TTAxis::Y as usize]
+            position[TTAxis::Y as usize]..position[TTAxis::Y as usize] + 1
         };
-        assert!(self.frames < u16::MAX as usize); //TODO ? prepare impl for larger sequences
         let t_chunk_div;
         let t_range = if view_axes[0] == TTAxis::T || view_axes[1] == TTAxis::T
         {
-            size[(view_axes[1] == TTAxis::T) as usize] = self.frames;
-            t_chunk_div = self.frames;
-            0..=(self.frames - 1) as u16
+            let range = if roi_zoom
+            {
+                settings.get_roi(TTAxis::T)
+            }
+            else
+            {
+                0..self.frames
+            };
+            size[(view_axes[1] == TTAxis::T) as usize] = range.len();
+            t_chunk_div = range.len();
+            range
         }
         else
         {
             t_chunk_div = 1;
-            position[TTAxis::T as usize] as u16..=position[TTAxis::T as usize] as u16
+            position[TTAxis::T as usize]..position[TTAxis::T as usize] + 1
         };
         let s_chunk_div;
         let s_range = if view_axes[0] == TTAxis::S || view_axes[1] == TTAxis::S
         {
-            size[(view_axes[1] == TTAxis::S) as usize] = self.frames;
-            s_chunk_div = self.frames;
-            wavelet.batch_calc(self.frames);
-            0..=(self.frames - 1) as u16
+            let range = if roi_zoom
+            {
+                settings.get_roi(TTAxis::S)
+            }
+            else
+            {
+                0..self.frames
+            };
+            wavelet.batch_calc(range.end);
+            size[(view_axes[1] == TTAxis::S) as usize] = range.len();
+            s_chunk_div = range.len();
+            range
         }
         else
         {
             s_chunk_div = 1;
             let _ = wavelet.get_poly_wise(position[TTAxis::S as usize]);
-            position[TTAxis::S as usize] as u16..=position[TTAxis::S as usize] as u16
+            position[TTAxis::S as usize]..position[TTAxis::S as usize] + 1
         };
+        let avm3 = (x_range.len(), y_range.len(), 1);
         let slice_arg = s![x_range, y_range, ..];
         let mut v : Vec<f64> = vec![0.0; size[0] * size[1]];
         s_range
@@ -324,13 +395,13 @@ impl TTInputData
                     .into_par_iter()
                     .zip(v.par_chunks_exact_mut(v.len() / t_chunk_div))
                     .for_each(|(t, v)| {
-                        self.data
-                            .slice(slice_arg)
-                            .lanes(AXIS_T)
-                            .into_iter()
-                            .into_par_iter()
-                            .zip(v.into_par_iter())
-                            .for_each(|(data, v)| {
+                        Zip::from(self.data.slice(slice_arg).lanes(AXIS_T))
+                            .and(
+                                ArrayViewMut3::from_shape(avm3, v)
+                                    .unwrap()
+                                    .lanes_mut(AXIS_T),
+                            )
+                            .par_for_each(|data, mut v| {
                                 let real_img : Vec<f64> = polywise
                                     .0
                                     .iter()
@@ -393,7 +464,7 @@ impl TTInputData
                                     })
                                     .collect();
                                 //convert to requested format
-                                *v = match params.display_mode.load(Ordering::Relaxed)
+                                v[0] = match params.display_mode.load(Ordering::Relaxed)
                                 {
                                     ComplexResultMode::Phase => real_img[1].atan2(real_img[0]), //radians
                                     ComplexResultMode::Magnitude => real_img[0].hypot(real_img[1]),

@@ -101,7 +101,7 @@ impl TTFourier
         }
     }
 
-    pub fn snapshot(&self, params : &ViewMode) -> Array2<f64>
+    pub fn snapshot(&self, params : &ViewMode, settings : &GlobalSettings) -> Array2<f64>
     {
         let settings_axis = params.get_settings_axes()[0] as usize;
         let freq_view = self.data.index_axis(
@@ -117,6 +117,17 @@ impl TTFourier
             ),
             params.position.read()[settings_axis],
         );
+        let freq_view = if settings.roi_zoom.load(Ordering::Relaxed)
+        {
+            let view_axes = params.get_view_axes();
+            let roi_h = settings.get_roi(view_axes[0]);
+            let roi_v = settings.get_roi(view_axes[1]);
+            freq_view.slice(s![roi_h, roi_v])
+        }
+        else
+        {
+            freq_view
+        };
         //convert to requested format
         match params.display_mode.load(Ordering::Relaxed)
         {

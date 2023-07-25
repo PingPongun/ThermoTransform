@@ -27,6 +27,7 @@ pub struct TTViewBackend
     pub view_mode :        Arc<ViewMode>,
     pub frozen_view_mode : ViewMode,
     pub settings :         Arc<GlobalSettings>,
+    pub frozen_settings :  GlobalSettings,
 }
 
 #[derive(Default)]
@@ -58,7 +59,11 @@ pub struct TTStateBackend
 //=======================================
 impl TTViewBackend
 {
-    fn freeze_view_mode(&mut self) { self.frozen_view_mode = (*self.view_mode).clone(); }
+    fn freeze(&mut self)
+    {
+        self.frozen_view_mode = (*self.view_mode).clone();
+        self.frozen_settings = (*self.settings).clone();
+    }
     fn time_view_check_update(&mut self, input_data : &Option<TTInputData>) -> ()
     {
         if self.frozen_view_mode.domain.load(Relaxed) == ViewModeDomain::TimeView
@@ -77,8 +82,19 @@ impl TTViewBackend
                         Axis(settings_axis),
                         self.frozen_view_mode.position.read()[settings_axis],
                     );
+                    let view = if self.frozen_settings.roi_zoom.load(Relaxed)
+                    {
+                        let view_axes = self.frozen_view_mode.get_view_axes();
+                        let roi_h = self.frozen_settings.get_roi(view_axes[0]);
+                        let roi_v = self.frozen_settings.get_roi(view_axes[1]);
+                        input_view.slice(s![roi_h, roi_v])
+                    }
+                    else
+                    {
+                        input_view
+                    };
                     let denoise = self.frozen_view_mode.denoise.load(Relaxed);
-                    self.update_image(input_view, TTGradients::Linear, denoise);
+                    self.update_image(view, TTGradients::Linear, denoise);
                 }
             }
         }
@@ -103,7 +119,8 @@ impl TTViewBackend
                     //// calculate & display requested waveletet transform
                     // let mut exec_time = ExecutionTimeMeas::new("exec_time_cwt.txt");
                     // exec_time.start();
-                    let cwt_view = input.cwt(wavelet_bank, &self.frozen_view_mode);
+                    let cwt_view =
+                        input.cwt(wavelet_bank, &self.frozen_view_mode, &self.frozen_settings);
                     // exec_time.stop_print("cwt: ");
                     let denoise = self.frozen_view_mode.denoise.load(Relaxed);
                     if self.frozen_view_mode.display_mode.load(Relaxed) == ComplexResultMode::Phase
@@ -139,7 +156,8 @@ impl TTViewBackend
                     //// calculate & display requested waveletet transform
                     // let mut exec_time = ExecutionTimeMeas::new("exec_time_cwt.txt");
                     // exec_time.start();
-                    let cwt_view = cwt.cwt(wavelet_bank, &self.frozen_view_mode);
+                    let cwt_view =
+                        cwt.cwt(wavelet_bank, &self.frozen_view_mode, &self.frozen_settings);
                     // exec_time.stop_print("cwt: ");
                     let denoise = self.frozen_view_mode.denoise.load(Relaxed);
                     if self.frozen_view_mode.display_mode.load(Relaxed) == ComplexResultMode::Phase
@@ -168,7 +186,7 @@ impl TTViewBackend
             {
                 if let Some(fourier) = fourier
                 {
-                    let snapshot = fourier.snapshot(&self.frozen_view_mode);
+                    let snapshot = fourier.snapshot(&self.frozen_view_mode, &self.frozen_settings);
                     let denoise = self.frozen_view_mode.denoise.load(Relaxed);
                     if self.frozen_view_mode.display_mode.load(Relaxed) == ComplexResultMode::Phase
                     {
@@ -195,16 +213,11 @@ impl TTViewBackend
         //view modes X-t, X-s, t-Y, s-Y
         {
             //use contrast/normalized values insted of absolute ones
-            let slice_idxs = if view_axes[0] == TTAxis::X
+            let slice_idxs = match (self.frozen_settings.roi_zoom.load(Relaxed), view_axes[0])
             {
-                s![self.settings.roi_min.read()[TTAxis::X as usize]
-                    ..self.settings.roi_max.read()[TTAxis::X as usize]]
-            }
-            else
-            {
-                //view_axes[1] == TTAxis::Y
-                s![self.settings.roi_min.read()[TTAxis::Y as usize]
-                    ..self.settings.roi_max.read()[TTAxis::Y as usize]]
+                (false, TTAxis::X) => s![self.frozen_settings.get_roi(TTAxis::X)],
+                (false, _) => s![self.frozen_settings.get_roi(TTAxis::Y)],
+                (true, _) => s![..],
             };
             if grad == TTGradients::Phase
             {
@@ -213,15 +226,12 @@ impl TTViewBackend
                     .into_iter()
                     .into_par_iter()
                     .for_each(|mut phases| {
-                        let (sum_x, sum_y) = phases.slice(&slice_idxs).iter().fold(
-                            (0., 0.),
-                            |(sum_x, sum_y), phase| {
-                                let (sin, cos) = phase.sin_cos();
-                                (sum_x + cos, sum_y + sin)
-                            },
-                        );
-                        let (sum_x, sum_y) =
-                            (sum_x / phases.len() as f64, sum_y / phases.len() as f64);
+                        let ps = phases.slice(&slice_idxs);
+                        let (sum_x, sum_y) = ps.iter().fold((0., 0.), |(sum_x, sum_y), phase| {
+                            let (sin, cos) = phase.sin_cos();
+                            (sum_x + cos, sum_y + sin)
+                        });
+                        let (sum_x, sum_y) = (sum_x / ps.len() as f64, sum_y / ps.len() as f64);
                         let std = 1.0 / (-2.0 * sum_x.hypot(sum_y).clamp(0., 1.).ln()).sqrt();
                         let mean = sum_y.atan2(sum_x);
                         phases.iter_mut().for_each(|phase| {
@@ -264,21 +274,20 @@ impl TTViewBackend
             array = convolve(&array, &filter, BorderMode::Reflect, 0);
         }
 
-        let roi_min_x = self.settings.roi_min.read()[view_axes[0] as usize];
-        let roi_min_y = self.settings.roi_min.read()[view_axes[1] as usize];
-        let roi_max_x = self.settings.roi_max.read()[view_axes[0] as usize];
-        let roi_max_y = self.settings.roi_max.read()[view_axes[1] as usize];
-        let array_roi = array.slice(s![roi_min_x..=roi_max_x, roi_min_y..=roi_max_y,]);
-        let array_iter;
+        let array_iter = array.t().into_iter();
+        let image_dim = [array.dim().0, array.dim().1];
+
         let mut array_vec;
-        let image_dim;
-        if self.settings.roi_zoom.load(Relaxed) == false
+        if self.frozen_settings.roi_zoom.load(Relaxed) == false
         {
+            let array_roi = array.slice(s![
+                self.frozen_settings.get_roi(view_axes[0]),
+                self.frozen_settings.get_roi(view_axes[1]),
+            ]);
             let roi_len = array_roi.len();
             let non_roi_len = array.len() - roi_len;
             //replicate roi pixels `roi_mul`-1 times to ensure that roi pixels occurs(in histogram) as if roi spans above at least 70% of image
             let roi_mul = (7.0 / 3.0 * non_roi_len as f64 / roi_len as f64).ceil() as usize;
-            array_iter = array.t().into_iter();
 
             array_vec = Vec::with_capacity(non_roi_len + roi_len * roi_mul + 2);
             array_vec.par_extend(array.into_par_iter());
@@ -286,16 +295,13 @@ impl TTViewBackend
             {
                 array_vec.par_extend(array_roi.into_par_iter());
             }
-            image_dim = [array.dim().0, array.dim().1];
         }
         else
         {
-            let roi_len = array_roi.len();
-            array_vec = Vec::with_capacity(roi_len + 2);
-            array_iter = array_roi.t().into_iter();
-            array_vec.par_extend(array_roi.into_par_iter());
-            image_dim = [array_roi.dim().0, array_roi.dim().1];
-        }
+            array_vec = Vec::with_capacity(array.len() + 2);
+            array_vec.par_extend(array.into_par_iter());
+        };
+
         if grad == TTGradients::Phase
         {
             //for phase gradient force -PI & PI as extreme vals
@@ -524,7 +530,7 @@ impl TTStateBackend
                                 {
                                     for view in &mut self.views
                                     {
-                                        view.freeze_view_mode();
+                                        view.freeze();
                                         view.time_view_check_update(&self.file.data.input_data);
                                         view.true_wavelet_view_check_update(
                                             &self.file.data.input_data,
@@ -569,7 +575,7 @@ impl TTStateBackend
                                 {
                                     for view in &mut self.views
                                     {
-                                        view.freeze_view_mode();
+                                        view.freeze();
                                         view.time_view_check_update(&self.file.data.input_data);
                                         view.fourier_view_check_update(&self.file.data.fourier);
                                         view.true_wavelet_view_check_update(
@@ -613,7 +619,7 @@ impl TTStateBackend
                             {
                                 for view in &mut self.views
                                 {
-                                    view.freeze_view_mode();
+                                    view.freeze();
                                     view.time_view_check_update(&self.file.data.input_data);
                                     view.wavelet_view_check_update(
                                         &self.file.data.lazy_cwt,
@@ -650,7 +656,7 @@ impl TTStateBackend
                 {
                     for view in &mut self.views
                     {
-                        view.freeze_view_mode();
+                        view.freeze();
                         view.time_view_check_update(&self.file.data.input_data);
                         view.wavelet_view_check_update(
                             &self.file.data.lazy_cwt,

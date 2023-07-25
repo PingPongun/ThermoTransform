@@ -496,6 +496,7 @@ fn tt_view_new(
             view_mode :        aparams,
             settings :         settings.clone(),
             frozen_view_mode : params,
+            frozen_settings :  (*settings).clone(),
         },
     )
 }

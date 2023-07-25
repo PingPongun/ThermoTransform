@@ -212,6 +212,21 @@ impl Clone for ViewMode
         }
     }
 }
+impl Clone for GlobalSettings
+{
+    fn clone(&self) -> Self
+    {
+        Self {
+            roi_min :     RwLock::new(*self.roi_min.read()),
+            roi_max :     RwLock::new(*self.roi_max.read()),
+            crossection : RwLock::new(*self.crossection.read()),
+            full_size :   RwLock::new(*self.full_size.read()),
+            roi_zoom :    AtomicBool::new(self.roi_zoom.load(Relaxed)),
+            select_mode : AtomicSelectMode::new(self.select_mode.load(Relaxed)),
+            changed :     AtomicBool::new(self.changed.load(Relaxed)),
+        }
+    }
+}
 mod tt_axis
 {
     use super::*;
